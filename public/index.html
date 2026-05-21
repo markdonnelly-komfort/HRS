@@ -1,0 +1,1607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#565A5C">
+  <title>Komfort - HR System</title>
+  <link rel="manifest" href="/manifest.json">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --primary: #404042;        /* Komfort dark charcoal */
+      --primary-light: #565A5C;  /* Komfort charcoal */
+      --accent: #FDC82F;         /* Komfort yellow */
+      --success: #2e7d32;
+      --warning: #ef6c00;
+      --danger: #c62828;
+      --info: #1565c0;
+      --bg: #F4F6F7;
+      --card: #ffffff;
+      --text: #404042;
+      --text-light: #757677;
+      --border: #dfe2e4;
+      --shadow: 0 2px 8px rgba(64,64,66,0.12);
+      --sidebar-w: 240px;
+    }
+    body { font-family: Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+    h1,h2,h3,h4,h5,h6 { color: var(--primary); font-weight: 700; }
+    a { color: var(--info); }
+
+    .hidden { display: none !important; }
+
+    /* ── Buttons ── */
+    .btn { display: inline-flex; align-items: center; justify-content: center; padding: 10px 18px; border: none; border-radius: 8px; font-size: 0.95rem; font-weight: 500; cursor: pointer; transition: all .2s; text-decoration: none; gap: 8px; }
+    .btn-primary { background: var(--primary-light); color: var(--accent); }
+    .btn-primary:hover { background: var(--primary); }
+    .btn-accent { background: var(--accent); color: var(--primary); }
+    .btn-accent:hover { filter: brightness(.95); }
+    .btn-success { background: var(--success); color: #fff; }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-warning { background: var(--warning); color: #fff; }
+    .btn-outline { background: transparent; border: 2px solid var(--primary); color: var(--primary); }
+    .btn-outline:hover { background: var(--primary); color: var(--accent); }
+    .btn-sm { padding: 6px 12px; font-size: 0.825rem; }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* ── Forms ── */
+    .form-group { margin-bottom: 14px; }
+    .form-group label { display: block; font-weight: 600; margin-bottom: 5px; color: var(--text); font-size: 0.875rem; }
+    .form-group input, .form-group select, .form-group textarea {
+      width: 100%; padding: 10px; border: 2px solid var(--border); border-radius: 8px; font-size: 0.95rem; background: #fff; font-family: inherit;
+    }
+    .form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: var(--primary); outline: none; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .form-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+    .req::after { content: " *"; color: var(--danger); }
+    fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    legend { padding: 0 8px; font-weight: 700; color: var(--primary); font-size: 0.95rem; }
+
+    /* ── Cards / layout ── */
+    .card { background: var(--card); border-radius: 12px; box-shadow: var(--shadow); padding: 20px; margin-bottom: 16px; }
+    .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; flex-wrap: wrap; gap: 10px; }
+    .muted { color: var(--text-light); }
+    .small { font-size: 0.85rem; }
+
+    /* ── Stat tiles ── */
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(170px,1fr)); gap: 16px; margin-bottom: 16px; }
+    .stat { background: var(--card); border-radius: 12px; box-shadow: var(--shadow); padding: 18px; border-left: 5px solid var(--accent); }
+    .stat .num { font-size: 2rem; font-weight: 700; color: var(--primary); }
+    .stat .lbl { color: var(--text-light); font-size: 0.85rem; margin-top: 2px; }
+    .stat.warn { border-left-color: var(--warning); }
+    .stat.ok { border-left-color: var(--success); }
+    .stat.info { border-left-color: var(--info); }
+
+    /* ── Tables ── */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); font-size: 0.9rem; vertical-align: middle; }
+    th { background: var(--bg); font-weight: 700; color: var(--primary); white-space: nowrap; }
+    tbody tr:hover { background: #fafbfc; }
+    .clickable { cursor: pointer; }
+
+    /* ── Badges ── */
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; }
+    .b-green { background: #e3f3e4; color: var(--success); }
+    .b-red { background: #fde8e8; color: var(--danger); }
+    .b-amber { background: #fff3e0; color: var(--warning); }
+    .b-grey { background: #e9ecef; color: var(--text-light); }
+    .b-blue { background: #e3f0fb; color: var(--info); }
+    .b-yellow { background: var(--accent); color: var(--primary); }
+
+    /* ── Avatar ── */
+    .avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--primary-light); color: var(--accent); display: inline-flex; align-items: center; justify-content: center; font-weight: 700; flex-shrink: 0; overflow: hidden; font-size: 0.9rem; }
+    .avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .avatar-lg { width: 96px; height: 96px; font-size: 2rem; }
+
+    /* ── Login ── */
+    #login-view { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg,#404042,#565A5C); padding: 20px; }
+    .login-card { background: #fff; border-radius: 16px; box-shadow: 0 10px 40px rgba(0,0,0,.3); padding: 36px; width: 100%; max-width: 400px; border-top: 6px solid var(--accent); }
+    .login-logo { text-align: center; margin-bottom: 8px; font-size: 1.8rem; font-weight: 700; letter-spacing: 1px; color: var(--primary); }
+    .login-sub { text-align: center; color: var(--text-light); margin-bottom: 24px; }
+    .login-hint { margin-top: 18px; font-size: 0.78rem; color: var(--text-light); background: var(--bg); border-radius: 8px; padding: 10px 12px; }
+
+    /* ── App shell ── */
+    #app { display: none; min-height: 100vh; }
+    #app.active { display: flex; }
+    .sidebar { width: var(--sidebar-w); background: var(--primary); color: #fff; display: flex; flex-direction: column; position: fixed; top: 0; bottom: 0; left: 0; z-index: 50; transition: transform .25s; }
+    .sidebar .brand { padding: 20px; border-bottom: 1px solid rgba(255,255,255,.1); }
+    .sidebar .brand .logo { font-size: 1.3rem; font-weight: 700; color: var(--accent); letter-spacing: 1px; }
+    .sidebar .brand .sub { font-size: 0.75rem; color: rgba(255,255,255,.6); }
+    .nav { flex: 1; overflow-y: auto; padding: 10px 0; }
+    .nav-item { display: flex; align-items: center; gap: 12px; padding: 12px 20px; color: rgba(255,255,255,.82); cursor: pointer; font-size: 0.92rem; border-left: 4px solid transparent; }
+    .nav-item:hover { background: rgba(255,255,255,.06); color: #fff; }
+    .nav-item.active { background: rgba(253,200,47,.14); color: var(--accent); border-left-color: var(--accent); font-weight: 600; }
+    .nav-item .ic { width: 20px; text-align: center; }
+    .nav-badge { margin-left: auto; background: var(--accent); color: var(--primary); border-radius: 10px; padding: 1px 8px; font-size: 0.72rem; font-weight: 700; }
+    .sidebar .who { padding: 14px 20px; border-top: 1px solid rgba(255,255,255,.1); font-size: 0.82rem; }
+    .sidebar .who .name { color: #fff; font-weight: 600; }
+    .sidebar .who .role { color: rgba(255,255,255,.55); text-transform: capitalize; }
+
+    .main { flex: 1; margin-left: var(--sidebar-w); display: flex; flex-direction: column; min-height: 100vh; }
+    .topbar { background: var(--primary-light); color: var(--accent); padding: 14px 22px; display: flex; align-items: center; justify-content: space-between; box-shadow: var(--shadow); position: sticky; top: 0; z-index: 40; border-bottom: 4px solid var(--accent); }
+    .topbar h1 { color: var(--accent); font-size: 1.2rem; }
+    .topbar .ta { display: flex; gap: 8px; align-items: center; }
+    .hamburger { display: none; background: none; border: none; color: var(--accent); font-size: 1.5rem; cursor: pointer; }
+    .content { padding: 22px; flex: 1; }
+
+    /* ── Tabs ── */
+    .tabs { display: flex; gap: 4px; border-bottom: 2px solid var(--border); margin-bottom: 18px; flex-wrap: wrap; }
+    .tab { padding: 10px 16px; cursor: pointer; font-weight: 600; color: var(--text-light); border-bottom: 3px solid transparent; margin-bottom: -2px; font-size: 0.9rem; }
+    .tab.active { color: var(--primary); border-bottom-color: var(--accent); }
+
+    /* ── Toolbar ── */
+    .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+    .toolbar input, .toolbar select { padding: 9px 12px; border: 2px solid var(--border); border-radius: 8px; font-size: 0.9rem; background: #fff; }
+    .toolbar .grow { flex: 1; min-width: 180px; }
+
+    /* ── Modal ── */
+    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1000; align-items: flex-start; justify-content: center; padding: 30px 16px; overflow-y: auto; }
+    .modal-overlay.active { display: flex; }
+    .modal { background: #fff; border-radius: 14px; padding: 24px; max-width: 640px; width: 100%; margin: auto; }
+    .modal.wide { max-width: 860px; }
+    .modal h2 { margin-bottom: 4px; }
+    .modal .modal-sub { color: var(--text-light); margin-bottom: 16px; font-size: 0.9rem; }
+    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; flex-wrap: wrap; }
+
+    /* ── Toast ── */
+    .toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 2000; }
+    .toast { padding: 12px 18px; border-radius: 8px; color: #fff; margin-top: 8px; font-weight: 500; box-shadow: var(--shadow); animation: slideIn .3s; }
+    .toast-success { background: var(--success); }
+    .toast-error { background: var(--danger); }
+    .toast-info { background: var(--info); }
+    @keyframes slideIn { from { transform: translateX(110%);} to { transform: translateX(0);} }
+
+    /* ── Detail layout ── */
+    .detail-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 6px; }
+    .detail-head .who h2 { margin: 0; }
+    .kv { display: grid; grid-template-columns: 180px 1fr; gap: 8px 16px; }
+    .kv dt { font-weight: 600; color: var(--text-light); font-size: 0.85rem; }
+    .kv dd { font-size: 0.95rem; }
+    @media (max-width: 600px){ .kv { grid-template-columns: 1fr; gap: 2px 0; } .kv dd { margin-bottom: 8px; } }
+
+    .progress { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; min-width: 80px; }
+    .progress > div { height: 100%; background: var(--success); border-radius: 4px; }
+
+    .empty { text-align: center; color: var(--text-light); padding: 40px 20px; }
+    .empty .ic { font-size: 2.5rem; display: block; margin-bottom: 8px; opacity: .5; }
+
+    .pill-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    .pill { padding: 6px 14px; border-radius: 20px; border: 2px solid var(--border); background: #fff; cursor: pointer; font-size: 0.85rem; font-weight: 600; color: var(--text-light); }
+    .pill.active { background: var(--primary); color: var(--accent); border-color: var(--primary); }
+
+    .doc-row { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; }
+    .doc-row .dic { font-size: 1.6rem; }
+    .doc-row .di { flex: 1; min-width: 0; }
+    .doc-row .di .t { font-weight: 600; }
+
+    @media (max-width: 860px){
+      .sidebar { transform: translateX(-100%); }
+      .sidebar.open { transform: translateX(0); }
+      .main { margin-left: 0; }
+      .hamburger { display: block; }
+      .form-row, .form-row-3 { grid-template-columns: 1fr; }
+    }
+    @media print {
+      .sidebar, .topbar, .toolbar, .btn, .tabs, .pill-tabs { display: none !important; }
+      .main { margin-left: 0; }
+      .content { padding: 0; }
+      #app.active { display: block; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════ LOGIN ═══════════════ -->
+<div id="login-view">
+  <div class="login-card">
+    <div class="login-logo">KOMFORT</div>
+    <div class="login-sub">HR System</div>
+    <form id="login-form" onsubmit="handleLogin(event)">
+      <div class="form-group">
+        <label>Username</label>
+        <input id="login-username" autocomplete="username" required autofocus>
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input id="login-password" type="password" autocomplete="current-password" required>
+      </div>
+      <button class="btn btn-primary" style="width:100%" type="submit">Sign in</button>
+    </form>
+    <div class="login-hint">
+      <strong>Demo accounts</strong><br>
+      HR Admin — <code>admin</code> / <code>admin123</code><br>
+      Manager — <code>manager</code> / <code>manager123</code><br>
+      Employee — <code>employee</code> / <code>employee123</code>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ APP SHELL ═══════════════ -->
+<div id="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="logo">KOMFORT</div>
+      <div class="sub">HR System</div>
+    </div>
+    <nav class="nav" id="nav"></nav>
+    <div class="who">
+      <div class="name" id="who-name"></div>
+      <div class="role" id="who-role"></div>
+      <button class="btn btn-outline btn-sm" style="margin-top:10px;width:100%;border-color:rgba(255,255,255,.4);color:#fff" onclick="logout()">Sign out</button>
+    </div>
+  </aside>
+  <div class="main">
+    <div class="topbar">
+      <div style="display:flex;align-items:center;gap:12px">
+        <button class="hamburger" onclick="toggleSidebar()">&#9776;</button>
+        <h1 id="page-title">Dashboard</h1>
+      </div>
+      <div class="ta" id="topbar-actions"></div>
+    </div>
+    <div class="content" id="content"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-overlay"><div class="modal" id="modal"></div></div>
+<div class="toast-container" id="toast-container"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// DATABASE LAYER — IndexedDB (offline/local persistence)
+// Mirrors the schema in database.js so it can move to the Node
+// backend later without changing the data shape.
+// ═══════════════════════════════════════════════════════════════
+const DB_NAME = 'KomfortHR';
+const DB_VERSION = 1;
+const STORES = ['users','employees','contacts','documents','leave','reviews','objectives','tasks','audit_log','settings'];
+let db = null;
+
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = (e) => {
+      const d = e.target.result;
+      if (!d.objectStoreNames.contains('users')) {
+        const s = d.createObjectStore('users', { keyPath: 'id' });
+        s.createIndex('username', 'username', { unique: true });
+        s.createIndex('employee_id', 'employee_id');
+      }
+      if (!d.objectStoreNames.contains('employees')) {
+        const s = d.createObjectStore('employees', { keyPath: 'id' });
+        s.createIndex('manager_id', 'manager_id');
+        s.createIndex('status', 'status');
+      }
+      if (!d.objectStoreNames.contains('contacts')) {
+        const s = d.createObjectStore('contacts', { keyPath: 'id' });
+        s.createIndex('employee_id', 'employee_id');
+      }
+      if (!d.objectStoreNames.contains('documents')) {
+        const s = d.createObjectStore('documents', { keyPath: 'id' });
+        s.createIndex('employee_id', 'employee_id');
+        s.createIndex('category', 'category');
+      }
+      if (!d.objectStoreNames.contains('leave')) {
+        const s = d.createObjectStore('leave', { keyPath: 'id' });
+        s.createIndex('employee_id', 'employee_id');
+        s.createIndex('status', 'status');
+      }
+      if (!d.objectStoreNames.contains('reviews')) {
+        const s = d.createObjectStore('reviews', { keyPath: 'id' });
+        s.createIndex('employee_id', 'employee_id');
+      }
+      if (!d.objectStoreNames.contains('objectives')) {
+        const s = d.createObjectStore('objectives', { keyPath: 'id' });
+        s.createIndex('employee_id', 'employee_id');
+      }
+      if (!d.objectStoreNames.contains('tasks')) {
+        const s = d.createObjectStore('tasks', { keyPath: 'id' });
+        s.createIndex('assigned_to', 'assigned_to');
+        s.createIndex('status', 'status');
+      }
+      if (!d.objectStoreNames.contains('audit_log')) {
+        const s = d.createObjectStore('audit_log', { keyPath: 'id', autoIncrement: true });
+        s.createIndex('timestamp', 'timestamp');
+      }
+      if (!d.objectStoreNames.contains('settings')) {
+        d.createObjectStore('settings', { keyPath: 'key' });
+      }
+    };
+    req.onsuccess = (e) => { db = e.target.result; resolve(db); };
+    req.onerror = (e) => reject(e.target.error);
+  });
+}
+const tx = (store, mode='readonly') => db.transaction(store, mode).objectStore(store);
+function idbGetAll(s){ return new Promise((res,rej)=>{ const r=tx(s).getAll(); r.onsuccess=()=>res(r.result); r.onerror=e=>rej(e.target.error); }); }
+function idbGet(s,k){ return new Promise((res,rej)=>{ const r=tx(s).get(k); r.onsuccess=()=>res(r.result); r.onerror=e=>rej(e.target.error); }); }
+function idbPut(s,v){ return new Promise((res,rej)=>{ const r=tx(s,'readwrite').put(v); r.onsuccess=()=>res(r.result); r.onerror=e=>rej(e.target.error); }); }
+function idbAdd(s,v){ return new Promise((res,rej)=>{ const r=tx(s,'readwrite').add(v); r.onsuccess=()=>res(r.result); r.onerror=e=>rej(e.target.error); }); }
+function idbDelete(s,k){ return new Promise((res,rej)=>{ const r=tx(s,'readwrite').delete(k); r.onsuccess=()=>res(); r.onerror=e=>rej(e.target.error); }); }
+function idbByIndex(s,idx,val){ return new Promise((res,rej)=>{ const r=tx(s).index(idx).getAll(val); r.onsuccess=()=>res(r.result); r.onerror=e=>rej(e.target.error); }); }
+
+function uuid(){ return crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx'.replace(/x/g,()=>Math.floor(Math.random()*16).toString(16)); }
+function nowISO(){ return new Date().toISOString(); }
+function today(){ return new Date().toISOString().slice(0,10); }
+
+async function sha256(str){
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+async function logAction(action, details={}){ try{ await idbAdd('audit_log', { timestamp: nowISO(), user: state.user?.username||'system', action, ...details }); }catch(e){} }
+
+// ═══════════════════════════════════════════════
+// SETTINGS / CONSTANTS
+// ═══════════════════════════════════════════════
+const SITES = ['Leeds','Axcess-10','Crawley'];
+const DEPARTMENTS = ['Operations','Manufacturing','Sales','Finance','HR','Design','Installation','Logistics','Management'];
+const LEAVE_TYPES = {
+  holiday:   { label:'Holiday',          deducts:true,  colour:'b-blue'  },
+  sickness:  { label:'Sickness',         deducts:false, colour:'b-red'   },
+  unpaid:    { label:'Unpaid leave',     deducts:false, colour:'b-grey'  },
+  maternity: { label:'Maternity/Paternity', deducts:false, colour:'b-amber' },
+  other:     { label:'Other',            deducts:false, colour:'b-grey'  }
+};
+const DEFAULT_ALLOWANCE = 25;
+
+async function getSetting(key, fallback){ const r = await idbGet('settings', key); return r ? r.value : fallback; }
+async function setSetting(key, value){ return idbPut('settings', { key, value }); }
+
+// ═══════════════════════════════════════════════
+// SEED DATA
+// ═══════════════════════════════════════════════
+async function seedDefaults(){
+  const users = await idbGetAll('users');
+  if (users.length > 0) return;
+
+  await setSetting('holiday_year_start', '01-01'); // MM-DD
+  await setSetting('company_name', 'Komfort Partitioning Ltd');
+
+  // Sample employees
+  const mgrId = uuid(), empId = uuid(), e3 = uuid(), e4 = uuid(), e5 = uuid();
+  const mk = (id, o) => ({
+    id, employee_number:o.num, first_name:o.fn, last_name:o.ln, preferred_name:'',
+    date_of_birth:o.dob, gender:o.g||'', ni_number:o.ni,
+    address_line1:o.a1||'', address_line2:'', city:o.city||'', postcode:o.pc||'',
+    personal_email:o.pe||'', work_email:o.we, mobile_phone:o.mob||'', home_phone:'',
+    job_title:o.jt, department:o.dept, site:o.site, manager_id:o.mgr||null,
+    employment_type:o.type||'Full-time', start_date:o.start, end_date:o.end||null,
+    status:o.status||'active', salary:o.sal, pay_frequency:'Annual',
+    bank_sort_code:'', bank_account:'',
+    holiday_allowance:o.hol||DEFAULT_ALLOWANCE,
+    photo:null, notes:'', created_at:nowISO(), updated_at:nowISO()
+  });
+  const emps = [
+    mk(mgrId,{num:'KP-001',fn:'Sarah',ln:'Mitchell',dob:'1980-04-12',g:'Female',ni:'AB123456C',a1:'14 Mill Lane',city:'Leeds',pc:'LS10 1AB',we:'s.mitchell@komfort.com',pe:'sarah.m@gmail.com',mob:'07700 900111',jt:'Operations Manager',dept:'Management',site:'Leeds',type:'Full-time',start:'2015-03-01',sal:62000,hol:28}),
+    mk(empId,{num:'KP-014',fn:'James',ln:'Okafor',dob:'1992-09-23',g:'Male',ni:'CD654321B',a1:'5 Beech Road',city:'Leeds',pc:'LS11 4QT',we:'j.okafor@komfort.com',pe:'jokafor@outlook.com',mob:'07700 900222',jt:'Production Operative',dept:'Manufacturing',site:'Leeds',mgr:mgrId,type:'Full-time',start:'2021-06-14',sal:31000,hol:25}),
+    mk(e3,{num:'KP-022',fn:'Priya',ln:'Sharma',dob:'1995-01-30',g:'Female',ni:'EF112233A',a1:'88 Oak Avenue',city:'Crawley',pc:'RH10 8GH',we:'p.sharma@komfort.com',mob:'07700 900333',jt:'Sales Executive',dept:'Sales',site:'Crawley',mgr:mgrId,type:'Full-time',start:'2023-02-20',sal:34000,hol:25}),
+    mk(e4,{num:'KP-009',fn:'David',ln:'Thompson',dob:'1975-11-05',g:'Male',ni:'GH445566D',a1:'3 Station Close',city:'Leeds',pc:'LS9 7RR',we:'d.thompson@komfort.com',mob:'07700 900444',jt:'Senior Installer',dept:'Installation',site:'Axcess-10',mgr:mgrId,type:'Full-time',start:'2018-08-13',sal:38000,hol:26}),
+    mk(e5,{num:'KP-005',fn:'Linda',ln:'Carter',dob:'1988-07-19',g:'Female',ni:'IJ778899E',a1:'21 Elmwood Drive',city:'Leeds',pc:'LS12 2AA',we:'l.carter@komfort.com',mob:'07700 900555',jt:'Finance Assistant',dept:'Finance',site:'Leeds',mgr:mgrId,type:'Part-time',start:'2019-10-01',end:'2025-12-31',status:'leaver',sal:29000,hol:20})
+  ];
+  for (const e of emps) await idbPut('employees', e);
+
+  const adminHash = await sha256('admin123');
+  const mgrHash = await sha256('manager123');
+  const empHash = await sha256('employee123');
+  await idbPut('users', { id:uuid(), username:'admin', password_hash:adminHash, role:'hr_admin', employee_id:null, full_name:'System Administrator', must_change_password:false, created_at:nowISO() });
+  await idbPut('users', { id:uuid(), username:'manager', password_hash:mgrHash, role:'manager', employee_id:mgrId, full_name:'Sarah Mitchell', must_change_password:false, created_at:nowISO() });
+  await idbPut('users', { id:uuid(), username:'employee', password_hash:empHash, role:'employee', employee_id:empId, full_name:'James Okafor', must_change_password:false, created_at:nowISO() });
+
+  // Sample leave
+  await idbPut('leave', { id:uuid(), employee_id:empId, type:'holiday', start_date:thisYear()+'-08-04', end_date:thisYear()+'-08-08', days:5, half_day:false, status:'approved', reason:'Summer holiday', requested_at:nowISO(), decided_by:'manager', decided_at:nowISO(), decision_note:'' });
+  await idbPut('leave', { id:uuid(), employee_id:empId, type:'holiday', start_date:thisYear()+'-12-22', end_date:thisYear()+'-12-23', days:2, half_day:false, status:'pending', reason:'Christmas', requested_at:nowISO(), decided_by:null, decided_at:null, decision_note:'' });
+  await idbPut('leave', { id:uuid(), employee_id:empId, type:'sickness', start_date:thisYear()+'-03-10', end_date:thisYear()+'-03-11', days:2, half_day:false, status:'approved', reason:'Flu', requested_at:nowISO(), decided_by:'admin', decided_at:nowISO(), decision_note:'Self-certified' });
+  await idbPut('leave', { id:uuid(), employee_id:e3, type:'holiday', start_date:thisYear()+'-07-01', end_date:thisYear()+'-07-04', days:4, half_day:false, status:'approved', reason:'', requested_at:nowISO(), decided_by:'manager', decided_at:nowISO(), decision_note:'' });
+
+  // Sample objectives
+  await idbPut('objectives', { id:uuid(), employee_id:empId, title:'Complete forklift certification', description:'Obtain counterbalance forklift licence to support warehouse operations.', target_date:thisYear()+'-09-30', status:'in_progress', progress:60, created_at:nowISO() });
+  await idbPut('objectives', { id:uuid(), employee_id:empId, title:'Reduce material waste by 5%', description:'Improve cutting efficiency on the production line.', target_date:thisYear()+'-12-31', status:'not_started', progress:0, created_at:nowISO() });
+
+  // Sample review
+  await idbPut('reviews', { id:uuid(), employee_id:empId, type:'mid_year', period:thisYear(), scheduled_date:thisYear()+'-06-15', status:'scheduled', reviewer_id:mgrId, self_assessment:'', manager_comments:'', overall_rating:'', completed_at:null, created_at:nowISO() });
+
+  // Sample company documents (text placeholders)
+  const policyData = (title) => 'data:text/plain;base64,' + btoa('Komfort Partitioning Ltd\n'+title+'\n\nThis is a placeholder document. Replace it by uploading the real file.');
+  await idbPut('documents', { id:uuid(), employee_id:null, category:'handbook', title:'Employee Handbook 2026', filename:'employee-handbook-2026.txt', mime_type:'text/plain', data:policyData('Employee Handbook 2026'), description:'Company-wide handbook covering conduct, benefits and procedures.', uploaded_by:'admin', uploaded_at:nowISO() });
+  await idbPut('documents', { id:uuid(), employee_id:null, category:'policy', title:'Annual Leave Policy', filename:'annual-leave-policy.txt', mime_type:'text/plain', data:policyData('Annual Leave Policy'), description:'How to request and carry over holiday.', uploaded_by:'admin', uploaded_at:nowISO() });
+  await idbPut('documents', { id:uuid(), employee_id:null, category:'policy', title:'Health & Safety Policy', filename:'health-safety-policy.txt', mime_type:'text/plain', data:policyData('Health & Safety Policy'), description:'Site safety responsibilities and reporting.', uploaded_by:'admin', uploaded_at:nowISO() });
+
+  // Sample HR tasks
+  const adminUser = (await idbByIndex('users','username','admin'))[0];
+  await idbPut('tasks', { id:uuid(), title:'Run probation review for new starter', description:'6-month probation review due.', assigned_to:adminUser.id, related_employee_id:e3, due_date:addDays(today(),7), reminder_date:addDays(today(),5), priority:'high', status:'open', created_at:nowISO(), completed_at:null });
+  await idbPut('tasks', { id:uuid(), title:'Update fire warden list', description:'Confirm trained fire wardens per site.', assigned_to:adminUser.id, related_employee_id:null, due_date:addDays(today(),14), reminder_date:null, priority:'medium', status:'in_progress', created_at:nowISO(), completed_at:null });
+
+  await logAction('seed', { detail:'Initial demo data created' });
+}
+function thisYear(){ return String(new Date().getFullYear()); }
+function addDays(dateStr, n){ const d = new Date(dateStr); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
+
+// ═══════════════════════════════════════════════
+// AUTH + STATE
+// ═══════════════════════════════════════════════
+const state = { user: null, page: null, employees: [], usersById: {} };
+
+async function handleLogin(e){
+  e.preventDefault();
+  const u = document.getElementById('login-username').value.trim().toLowerCase();
+  const p = document.getElementById('login-password').value;
+  const all = await idbGetAll('users');
+  const user = all.find(x => x.username.toLowerCase() === u);
+  if (!user){ toast('Invalid username or password','error'); return; }
+  const hash = await sha256(p);
+  if (hash !== user.password_hash){ toast('Invalid username or password','error'); return; }
+  state.user = user;
+  sessionStorage.setItem('hr_session', user.id);
+  await logAction('login');
+  await enterApp();
+}
+
+async function enterApp(){
+  document.getElementById('login-view').style.display = 'none';
+  document.getElementById('app').classList.add('active');
+  await refreshCaches();
+  document.getElementById('who-name').textContent = state.user.full_name;
+  document.getElementById('who-role').textContent = roleLabel(state.user.role);
+  buildNav();
+  const start = state.user.role === 'employee' ? 'my-profile' : 'dashboard';
+  navigate(start);
+}
+
+function roleLabel(r){ return ({hr_admin:'HR Admin', manager:'Manager', employee:'Employee'})[r] || r; }
+
+function logout(){
+  state.user = null;
+  sessionStorage.removeItem('hr_session');
+  document.getElementById('app').classList.remove('active');
+  document.getElementById('login-view').style.display = 'flex';
+  document.getElementById('login-form').reset();
+}
+
+async function refreshCaches(){
+  state.employees = await idbGetAll('employees');
+  const users = await idbGetAll('users');
+  state.usersById = {}; users.forEach(u => state.usersById[u.id] = u);
+}
+
+// ═══════════════════════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════════════════════
+const NAV = {
+  hr_admin: [
+    { id:'dashboard',   label:'Dashboard',        ic:'▦' },
+    { id:'employees',   label:'Employees',        ic:'☺' },
+    { id:'leave',       label:'Holiday & Absence',ic:'✈', badge:'pendingLeave' },
+    { id:'performance', label:'Performance',      ic:'★' },
+    { id:'documents',   label:'Documents',        ic:'▤' },
+    { id:'reports',     label:'Reports',          ic:'▣' },
+    { id:'tasks',       label:'HR Tasks',         ic:'✔', badge:'openTasks' },
+    { id:'users',       label:'User Accounts',    ic:'⚷' },
+    { id:'settings',    label:'Settings',         ic:'⚙' }
+  ],
+  manager: [
+    { id:'dashboard',   label:'Dashboard',        ic:'▦' },
+    { id:'team',        label:'My Team',          ic:'☺' },
+    { id:'leave',       label:'Approvals',        ic:'✈', badge:'pendingLeave' },
+    { id:'performance', label:'Performance',      ic:'★' },
+    { id:'documents',   label:'Documents',        ic:'▤' },
+    { id:'tasks',       label:'My Tasks',         ic:'✔', badge:'openTasks' }
+  ],
+  employee: [
+    { id:'my-profile',  label:'My Profile',       ic:'☺' },
+    { id:'my-leave',    label:'My Holiday',       ic:'✈' },
+    { id:'my-performance', label:'My Performance', ic:'★' },
+    { id:'documents',   label:'Company Documents',ic:'▤' }
+  ]
+};
+
+async function buildNav(){
+  const nav = document.getElementById('nav');
+  const items = NAV[state.user.role] || [];
+  const badges = await computeBadges();
+  nav.innerHTML = items.map(i => `
+    <div class="nav-item" data-page="${i.id}" onclick="navigate('${i.id}')">
+      <span class="ic">${i.ic}</span><span>${i.label}</span>
+      ${i.badge && badges[i.badge] ? `<span class="nav-badge">${badges[i.badge]}</span>` : ''}
+    </div>`).join('');
+}
+
+async function computeBadges(){
+  const leave = await idbGetAll('leave');
+  const tasks = await idbGetAll('tasks');
+  let pendingLeave = leave.filter(l => l.status === 'pending');
+  if (state.user.role === 'manager'){
+    const team = teamMemberIds();
+    pendingLeave = pendingLeave.filter(l => team.includes(l.employee_id));
+  }
+  let openTasks = tasks.filter(t => t.status !== 'done');
+  if (state.user.role === 'manager') openTasks = openTasks.filter(t => t.assigned_to === state.user.id);
+  return { pendingLeave: pendingLeave.length, openTasks: openTasks.length };
+}
+
+function teamMemberIds(){
+  if (!state.user.employee_id) return [];
+  return state.employees.filter(e => e.manager_id === state.user.employee_id).map(e => e.id);
+}
+
+const PAGE_TITLES = { dashboard:'Dashboard', employees:'Employees', team:'My Team', leave: state=>'', performance:'Performance', documents:'Documents', reports:'Reports', tasks:'Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-performance':'My Performance' };
+
+async function navigate(page){
+  state.page = page;
+  window._detailEmp = null;
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.page === page));
+  document.getElementById('topbar-actions').innerHTML = '';
+  document.getElementById('sidebar').classList.remove('open');
+  await refreshCaches();
+  const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', leave: state.user.role==='manager'?'Leave Approvals':'Holiday & Absence', performance:'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: state.user.role==='manager'?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-performance':'My Performance' };
+  document.getElementById('page-title').textContent = titles[page] || page;
+  const c = document.getElementById('content');
+  c.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    switch(page){
+      case 'dashboard': await renderDashboard(c); break;
+      case 'employees': await renderEmployees(c, false); break;
+      case 'team': await renderEmployees(c, true); break;
+      case 'leave': await renderLeave(c); break;
+      case 'performance': await renderPerformance(c); break;
+      case 'documents': await renderDocuments(c); break;
+      case 'reports': await renderReports(c); break;
+      case 'tasks': await renderTasks(c); break;
+      case 'users': await renderUsers(c); break;
+      case 'settings': await renderSettings(c); break;
+      case 'my-profile': await renderMyProfile(c); break;
+      case 'my-leave': await renderMyLeave(c); break;
+      case 'my-performance': await renderMyPerformance(c); break;
+      default: c.innerHTML = '<div class="empty">Page not found</div>';
+    }
+  } catch(err){ console.error(err); c.innerHTML = `<div class="empty">Error: ${err.message}</div>`; }
+  buildNav();
+}
+function toggleSidebar(){ document.getElementById('sidebar').classList.toggle('open'); }
+function setTopbar(html){ document.getElementById('topbar-actions').innerHTML = html; }
+
+// ═══════════════════════════════════════════════
+// UI HELPERS
+// ═══════════════════════════════════════════════
+function toast(msg, type='success'){
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.textContent = msg;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(()=>el.remove(), 3500);
+}
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function openModal(html, wide){ const m=document.getElementById('modal'); m.className='modal'+(wide?' wide':''); m.innerHTML=html; document.getElementById('modal-overlay').classList.add('active'); }
+function closeModal(){ document.getElementById('modal-overlay').classList.remove('active'); }
+document.getElementById('modal-overlay').addEventListener('click', e=>{ if(e.target.id==='modal-overlay') closeModal(); });
+
+function empName(id){ const e = state.employees.find(x=>x.id===id); return e ? `${e.first_name} ${e.last_name}` : '—'; }
+function empById(id){ return state.employees.find(x=>x.id===id); }
+function initials(e){ return ((e.first_name?.[0]||'')+(e.last_name?.[0]||'')).toUpperCase(); }
+function avatarHtml(e, lg){ const cls='avatar'+(lg?' avatar-lg':''); return e && e.photo ? `<div class="${cls}"><img src="${e.photo}"></div>` : `<div class="${cls}">${e?initials(e):'?'}</div>`; }
+function fmtDate(d){ if(!d) return '—'; const dt=new Date(d); return isNaN(dt)?d:dt.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); }
+function fmtMoney(n){ if(n==null||n==='') return '—'; return '£'+Number(n).toLocaleString('en-GB',{minimumFractionDigits:0,maximumFractionDigits:0}); }
+function statusBadge(s){ const m={active:['Active','b-green'],leaver:['Leaver','b-grey'],on_leave:['On leave','b-amber']}; const [t,c]=m[s]||[s,'b-grey']; return `<span class="badge ${c}">${t}</span>`; }
+function leaveStatusBadge(s){ const m={pending:['Pending','b-amber'],approved:['Approved','b-green'],rejected:['Rejected','b-red'],cancelled:['Cancelled','b-grey']}; const [t,c]=m[s]||[s,'b-grey']; return `<span class="badge ${c}">${t}</span>`; }
+function val(id){ const e=document.getElementById(id); return e? e.value.trim() : ''; }
+function numVal(id){ const v=val(id); return v===''?null:Number(v); }
+
+// working days (Mon–Fri) inclusive
+function workingDays(start, end){
+  let d=new Date(start), e=new Date(end), n=0;
+  if (isNaN(d)||isNaN(e)||e<d) return 0;
+  while(d<=e){ const wd=d.getDay(); if(wd!==0&&wd!==6) n++; d.setDate(d.getDate()+1); }
+  return n;
+}
+
+// Holiday year boundaries for a given date
+async function holidayYearBounds(ref){
+  const mmdd = await getSetting('holiday_year_start','01-01');
+  const [mm,dd] = mmdd.split('-').map(Number);
+  const r = ref?new Date(ref):new Date();
+  let startYear = r.getFullYear();
+  const boundary = new Date(startYear, mm-1, dd);
+  if (r < boundary) startYear -= 1;
+  const start = new Date(startYear, mm-1, dd);
+  const end = new Date(startYear+1, mm-1, dd); end.setDate(end.getDate()-1);
+  return { start: start.toISOString().slice(0,10), end: end.toISOString().slice(0,10), label:`${startYear}/${String((startYear+1)).slice(2)}` };
+}
+
+async function leaveBalance(employeeId){
+  const e = empById(employeeId);
+  const allowance = e?.holiday_allowance ?? DEFAULT_ALLOWANCE;
+  const bounds = await holidayYearBounds();
+  const rows = await idbByIndex('leave','employee_id',employeeId);
+  let taken=0, pending=0;
+  rows.forEach(l => {
+    if (l.type!=='holiday') return;
+    if (l.start_date < bounds.start || l.start_date > bounds.end) return;
+    if (l.status==='approved') taken += l.days;
+    else if (l.status==='pending') pending += l.days;
+  });
+  return { allowance, taken, pending, remaining: allowance - taken - pending, bounds };
+}
+
+function downloadCSV(filename, rows){
+  const csv = rows.map(r => r.map(c => {
+    const s = c==null?'':String(c);
+    return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+  }).join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// ═══════════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════════
+async function renderDashboard(c){
+  const isMgr = state.user.role === 'manager';
+  let emps = state.employees;
+  if (isMgr) { const team = teamMemberIds(); emps = emps.filter(e => team.includes(e.id)); }
+  const active = emps.filter(e => e.status==='active');
+  const leave = await idbGetAll('leave');
+  const tasks = await idbGetAll('tasks');
+  const bounds = await holidayYearBounds();
+
+  let pending = leave.filter(l => l.status==='pending');
+  if (isMgr){ const team=teamMemberIds(); pending = pending.filter(l=>team.includes(l.employee_id)); }
+
+  // currently off today
+  const offToday = leave.filter(l => l.status==='approved' && l.start_date<=today() && l.end_date>=today() && (!isMgr || teamMemberIds().includes(l.employee_id)));
+  // sickness days this holiday year
+  const sickDays = leave.filter(l => l.type==='sickness' && l.status==='approved' && l.start_date>=bounds.start && l.start_date<=bounds.end && (!isMgr || teamMemberIds().includes(l.employee_id))).reduce((a,l)=>a+l.days,0);
+  let myTasks = tasks.filter(t => t.status!=='done');
+  if (isMgr) myTasks = myTasks.filter(t=>t.assigned_to===state.user.id);
+
+  c.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat"><div class="num">${active.length}</div><div class="lbl">Active employees</div></div>
+      <div class="stat info"><div class="num">${offToday.length}</div><div class="lbl">Off today</div></div>
+      <div class="stat warn"><div class="num">${pending.length}</div><div class="lbl">Leave to approve</div></div>
+      <div class="stat ${sickDays>0?'warn':'ok'}"><div class="num">${sickDays}</div><div class="lbl">Sick days (${bounds.label})</div></div>
+      <div class="stat"><div class="num">${myTasks.length}</div><div class="lbl">Open tasks</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Pending leave approvals</h3>${pending.length?`<button class="btn btn-primary btn-sm" onclick="navigate('leave')">Review all</button>`:''}</div>
+      ${pending.length ? `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Days</th><th></th></tr></thead><tbody>${
+        pending.slice(0,6).map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)} – ${fmtDate(l.end_date)}</td><td>${l.days}</td><td style="text-align:right"><button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')">Approve</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button></td></tr>`).join('')
+      }</tbody></table></div>` : `<div class="empty"><span class="ic">✓</span>No leave waiting for approval.</div>`}
+    </div>
+
+    <div class="form-row">
+      <div class="card">
+        <div class="card-head"><h3>Who's off today</h3></div>
+        ${offToday.length ? offToday.map(l=>`<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">${avatarHtml(empById(l.employee_id))}<div><div style="font-weight:600">${esc(empName(l.employee_id))}</div><div class="small muted">${LEAVE_TYPES[l.type].label} · back ${fmtDate(addDays(l.end_date,1))}</div></div></div>`).join('') : '<div class="empty small">Everyone is in today.</div>'}
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Upcoming tasks</h3><button class="btn btn-outline btn-sm" onclick="navigate('tasks')">View</button></div>
+        ${myTasks.length ? myTasks.sort((a,b)=>(a.due_date||'').localeCompare(b.due_date||'')).slice(0,6).map(t=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)"><div><div style="font-weight:600">${esc(t.title)}</div><div class="small muted">Due ${fmtDate(t.due_date)}</div></div>${priorityBadge(t.priority)}</div>`).join('') : '<div class="empty small">No open tasks.</div>'}
+      </div>
+    </div>`;
+}
+function priorityBadge(p){ const m={high:['High','b-red'],medium:['Medium','b-amber'],low:['Low','b-grey']}; const [t,cl]=m[p]||[p,'b-grey']; return `<span class="badge ${cl}">${t}</span>`; }
+
+// ═══════════════════════════════════════════════
+// EMPLOYEES
+// ═══════════════════════════════════════════════
+async function renderEmployees(c, teamOnly){
+  let emps = [...state.employees];
+  if (teamOnly){ const team = teamMemberIds(); emps = emps.filter(e => team.includes(e.id)); }
+  if (state.user.role === 'hr_admin') setTopbar(`<button class="btn btn-accent" onclick="employeeForm()">+ Add employee</button>`);
+  window._allEmps = emps;
+  c.innerHTML = `
+    <div class="toolbar">
+      <input class="grow" id="emp-search" placeholder="Search name, number, job title…" oninput="filterEmployees()">
+      <select id="emp-site" onchange="filterEmployees()"><option value="">All sites</option>${SITES.map(s=>`<option>${s}</option>`).join('')}</select>
+      <select id="emp-dept" onchange="filterEmployees()"><option value="">All departments</option>${DEPARTMENTS.map(s=>`<option>${s}</option>`).join('')}</select>
+      <select id="emp-status" onchange="filterEmployees()"><option value="active">Active</option><option value="">All statuses</option><option value="leaver">Leavers</option><option value="on_leave">On leave</option></select>
+    </div>
+    <div class="card"><div class="table-wrap"><table>
+      <thead><tr><th></th><th>Name</th><th>No.</th><th>Job title</th><th>Department</th><th>Site</th><th>Manager</th><th>Status</th></tr></thead>
+      <tbody id="emp-tbody"></tbody>
+    </table></div></div>`;
+  filterEmployees();
+}
+function filterEmployees(){
+  const q = (document.getElementById('emp-search')?.value||'').toLowerCase();
+  const site = document.getElementById('emp-site')?.value||'';
+  const dept = document.getElementById('emp-dept')?.value||'';
+  const st = document.getElementById('emp-status')?.value;
+  let rows = window._allEmps.filter(e => {
+    if (site && e.site!==site) return false;
+    if (dept && e.department!==dept) return false;
+    if (st!=='' && st!==undefined && e.status!==st) return false;
+    if (q){ const hay=`${e.first_name} ${e.last_name} ${e.employee_number} ${e.job_title}`.toLowerCase(); if(!hay.includes(q)) return false; }
+    return true;
+  }).sort((a,b)=>`${a.last_name}`.localeCompare(b.last_name));
+  const tb = document.getElementById('emp-tbody');
+  tb.innerHTML = rows.length ? rows.map(e=>`
+    <tr class="clickable" onclick="employeeDetail('${e.id}')">
+      <td>${avatarHtml(e)}</td>
+      <td><strong>${esc(e.first_name)} ${esc(e.last_name)}</strong></td>
+      <td>${esc(e.employee_number)}</td>
+      <td>${esc(e.job_title)}</td>
+      <td>${esc(e.department)}</td>
+      <td>${esc(e.site)}</td>
+      <td>${e.manager_id?esc(empName(e.manager_id)):'—'}</td>
+      <td>${statusBadge(e.status)}</td>
+    </tr>`).join('') : `<tr><td colspan="8"><div class="empty">No employees match.</div></td></tr>`;
+}
+
+async function employeeDetail(id){
+  const e = empById(id);
+  if (!e) return;
+  const canEdit = state.user.role==='hr_admin';
+  setTopbar(`<button class="btn btn-outline" onclick="navigate('${state.page}')">← Back</button>${canEdit?` <button class="btn btn-primary" onclick="employeeForm('${id}')">Edit</button>`:''}`);
+  const c = document.getElementById('content');
+  const showSalary = state.user.role==='hr_admin';
+  const bal = await leaveBalance(id);
+  c.innerHTML = `
+    <div class="card">
+      <div class="detail-head">
+        ${avatarHtml(e,true)}
+        <div class="who">
+          <h2>${esc(e.first_name)} ${esc(e.last_name)} ${statusBadge(e.status)}</h2>
+          <div class="muted">${esc(e.job_title)} · ${esc(e.department)} · ${esc(e.site)}</div>
+          <div class="small muted">${esc(e.employee_number)} · Started ${fmtDate(e.start_date)}${e.manager_id?` · Reports to ${esc(empName(e.manager_id))}`:''}</div>
+        </div>
+      </div>
+    </div>
+    <div class="tabs" id="emp-tabs">
+      <div class="tab active" onclick="empTab('personal',this)">Personal</div>
+      <div class="tab" onclick="empTab('employment',this)">Employment</div>
+      <div class="tab" onclick="empTab('contacts',this)">Emergency contacts</div>
+      <div class="tab" onclick="empTab('leave',this)">Holiday & absence</div>
+      <div class="tab" onclick="empTab('performance',this)">Performance</div>
+      <div class="tab" onclick="empTab('documents',this)">Documents</div>
+    </div>
+    <div id="emp-tab-body"></div>`;
+  window._detailEmp = id;
+  empTab('personal', document.querySelector('#emp-tabs .tab'));
+}
+function empTab(tab, el){
+  document.querySelectorAll('#emp-tabs .tab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  const id = window._detailEmp;
+  const body = document.getElementById('emp-tab-body');
+  ({
+    personal: ()=>empTabPersonal(body,id),
+    employment: ()=>empTabEmployment(body,id),
+    contacts: ()=>empTabContacts(body,id),
+    leave: ()=>empTabLeave(body,id),
+    performance: ()=>empTabPerformance(body,id),
+    documents: ()=>empTabDocuments(body,id)
+  })[tab]();
+}
+function empTabPersonal(body, id){
+  const e = empById(id);
+  body.innerHTML = `<div class="card"><dl class="kv">
+    <dt>Full name</dt><dd>${esc(e.first_name)} ${esc(e.last_name)}</dd>
+    <dt>Preferred name</dt><dd>${esc(e.preferred_name)||'—'}</dd>
+    <dt>Date of birth</dt><dd>${fmtDate(e.date_of_birth)}</dd>
+    <dt>Gender</dt><dd>${esc(e.gender)||'—'}</dd>
+    <dt>NI number</dt><dd>${esc(e.ni_number)||'—'}</dd>
+    <dt>Address</dt><dd>${[e.address_line1,e.address_line2,e.city,e.postcode].filter(Boolean).map(esc).join(', ')||'—'}</dd>
+    <dt>Mobile</dt><dd>${esc(e.mobile_phone)||'—'}</dd>
+    <dt>Home phone</dt><dd>${esc(e.home_phone)||'—'}</dd>
+    <dt>Personal email</dt><dd>${esc(e.personal_email)||'—'}</dd>
+    <dt>Work email</dt><dd>${esc(e.work_email)||'—'}</dd>
+  </dl></div>`;
+}
+function empTabEmployment(body, id){
+  const e = empById(id);
+  const showSalary = state.user.role==='hr_admin';
+  body.innerHTML = `<div class="card"><dl class="kv">
+    <dt>Employee number</dt><dd>${esc(e.employee_number)}</dd>
+    <dt>Job title</dt><dd>${esc(e.job_title)}</dd>
+    <dt>Department</dt><dd>${esc(e.department)}</dd>
+    <dt>Site</dt><dd>${esc(e.site)}</dd>
+    <dt>Manager</dt><dd>${e.manager_id?esc(empName(e.manager_id)):'—'}</dd>
+    <dt>Employment type</dt><dd>${esc(e.employment_type)}</dd>
+    <dt>Start date</dt><dd>${fmtDate(e.start_date)}</dd>
+    <dt>End date</dt><dd>${fmtDate(e.end_date)}</dd>
+    <dt>Status</dt><dd>${statusBadge(e.status)}</dd>
+    ${showSalary?`<dt>Salary</dt><dd>${fmtMoney(e.salary)} (${esc(e.pay_frequency)})</dd>
+    <dt>Bank sort code</dt><dd>${esc(e.bank_sort_code)||'—'}</dd>
+    <dt>Bank account</dt><dd>${esc(e.bank_account)||'—'}</dd>`:''}
+    <dt>Holiday allowance</dt><dd>${e.holiday_allowance} days/yr</dd>
+    <dt>Notes</dt><dd>${esc(e.notes)||'—'}</dd>
+  </dl></div>`;
+}
+async function empTabContacts(body, id){
+  const contacts = await idbByIndex('contacts','employee_id',id);
+  const canEdit = state.user.role==='hr_admin';
+  body.innerHTML = `<div class="card"><div class="card-head"><h3>Emergency contacts</h3>${canEdit?`<button class="btn btn-accent btn-sm" onclick="contactForm('${id}')">+ Add contact</button>`:''}</div>
+    ${contacts.length?contacts.map(ct=>`<div class="doc-row"><div class="dic">☎</div><div class="di"><div class="t">${esc(ct.name)} <span class="small muted">(${esc(ct.relationship)})</span></div><div class="small muted">${esc(ct.phone)}${ct.email?` · ${esc(ct.email)}`:''}</div></div>${canEdit?`<button class="btn btn-outline btn-sm" onclick="contactForm('${id}','${ct.id}')">Edit</button> <button class="btn btn-danger btn-sm" onclick="deleteContact('${ct.id}','${id}')">×</button>`:''}</div>`).join(''):'<div class="empty small">No emergency contacts recorded.</div>'}
+  </div>`;
+}
+async function empTabLeave(body, id){
+  const bal = await leaveBalance(id);
+  const rows = (await idbByIndex('leave','employee_id',id)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
+  const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id));
+  body.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat"><div class="num">${bal.allowance}</div><div class="lbl">Allowance (${bal.bounds.label})</div></div>
+      <div class="stat info"><div class="num">${bal.taken}</div><div class="lbl">Taken</div></div>
+      <div class="stat warn"><div class="num">${bal.pending}</div><div class="lbl">Pending</div></div>
+      <div class="stat ok"><div class="num">${bal.remaining}</div><div class="lbl">Remaining</div></div>
+    </div>
+    <div class="card"><div class="card-head"><h3>Leave & absence history</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="leaveForm('${id}')">+ Record leave</button>`:''}</div>
+    ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
+      rows.map(l=>`<tr><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td>${canManage?`<td style="text-align:right">${l.status==='pending'?`<button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')">✓</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">✕</button>`:`<button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button>`}</td>`:''}</tr>`).join('')
+    }</tbody></table></div>`:'<div class="empty small">No leave recorded.</div>'}</div>`;
+}
+async function empTabPerformance(body, id){
+  const reviews = (await idbByIndex('reviews','employee_id',id)).sort((a,b)=>(b.scheduled_date||'').localeCompare(a.scheduled_date||''));
+  const objectives = await idbByIndex('objectives','employee_id',id);
+  const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id));
+  body.innerHTML = `
+    <div class="card"><div class="card-head"><h3>Reviews & appraisals</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="reviewForm('${id}')">+ Schedule review</button>`:''}</div>
+      ${reviews.length?`<div class="table-wrap"><table><thead><tr><th>Type</th><th>Period</th><th>Date</th><th>Reviewer</th><th>Rating</th><th>Status</th><th></th></tr></thead><tbody>${
+        reviews.map(r=>`<tr><td>${r.type==='annual'?'Annual appraisal':'Mid-year review'}</td><td>${esc(r.period)}</td><td>${fmtDate(r.scheduled_date)}</td><td>${r.reviewer_id?esc(empName(r.reviewer_id)):'—'}</td><td>${esc(r.overall_rating)||'—'}</td><td>${reviewStatusBadge(r.status)}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="reviewForm('${id}','${r.id}')">${canManage?'Open':'View'}</button></td></tr>`).join('')
+      }</tbody></table></div>`:'<div class="empty small">No reviews scheduled.</div>'}
+    </div>
+    <div class="card"><div class="card-head"><h3>Objectives</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="objectiveForm('${id}')">+ Add objective</button>`:''}</div>
+      ${objectives.length?objectives.map(o=>`<div class="doc-row"><div class="di"><div class="t">${esc(o.title)} ${objStatusBadge(o.status)}</div><div class="small muted">${esc(o.description)||''}</div><div class="small muted">Target ${fmtDate(o.target_date)}</div><div class="progress" style="margin-top:6px"><div style="width:${o.progress}%"></div></div></div>${canManage?`<button class="btn btn-outline btn-sm" onclick="objectiveForm('${id}','${o.id}')">Edit</button>`:''}</div>`).join(''):'<div class="empty small">No objectives set.</div>'}
+    </div>`;
+}
+function reviewStatusBadge(s){ const m={scheduled:['Scheduled','b-blue'],in_progress:['In progress','b-amber'],completed:['Completed','b-green']}; const [t,c]=m[s]||[s,'b-grey']; return `<span class="badge ${c}">${t}</span>`; }
+function objStatusBadge(s){ const m={not_started:['Not started','b-grey'],in_progress:['In progress','b-amber'],achieved:['Achieved','b-green'],cancelled:['Cancelled','b-red']}; const [t,c]=m[s]||[s,'b-grey']; return `<span class="badge ${c}">${t}</span>`; }
+
+async function empTabDocuments(body, id){
+  const docs = (await idbByIndex('documents','employee_id',id));
+  const canEdit = state.user.role==='hr_admin';
+  body.innerHTML = `<div class="card"><div class="card-head"><h3>Employee documents</h3>${canEdit?`<button class="btn btn-accent btn-sm" onclick="documentForm('${id}')">+ Upload document</button>`:''}</div>
+    ${docs.length?docs.map(d=>docRow(d, canEdit)).join(''):'<div class="empty small">No documents (contracts, reference letters, etc.) uploaded.</div>'}
+  </div>`;
+}
+
+// ── Employee form ──
+function employeeForm(id){
+  const e = id ? empById(id) : {};
+  const mgrs = state.employees.filter(x=>x.id!==id);
+  openModal(`
+    <h2>${id?'Edit':'Add'} employee</h2>
+    <div class="modal-sub">${id?esc(e.first_name+' '+e.last_name):'New employee record'}</div>
+    <form onsubmit="saveEmployee(event,'${id||''}')">
+      <fieldset><legend>Personal</legend>
+        <div class="form-row">
+          <div class="form-group"><label class="req">First name</label><input id="f-fn" value="${esc(e.first_name||'')}" required></div>
+          <div class="form-group"><label class="req">Last name</label><input id="f-ln" value="${esc(e.last_name||'')}" required></div>
+        </div>
+        <div class="form-row-3">
+          <div class="form-group"><label>Date of birth</label><input id="f-dob" type="date" value="${esc(e.date_of_birth||'')}"></div>
+          <div class="form-group"><label>Gender</label><select id="f-gender"><option value="">—</option>${['Female','Male','Other','Prefer not to say'].map(g=>`<option ${e.gender===g?'selected':''}>${g}</option>`).join('')}</select></div>
+          <div class="form-group"><label>NI number</label><input id="f-ni" value="${esc(e.ni_number||'')}" placeholder="AB123456C"></div>
+        </div>
+        <div class="form-group"><label>Address line 1</label><input id="f-a1" value="${esc(e.address_line1||'')}"></div>
+        <div class="form-row-3">
+          <div class="form-group"><label>Address line 2</label><input id="f-a2" value="${esc(e.address_line2||'')}"></div>
+          <div class="form-group"><label>Town/City</label><input id="f-city" value="${esc(e.city||'')}"></div>
+          <div class="form-group"><label>Postcode</label><input id="f-pc" value="${esc(e.postcode||'')}"></div>
+        </div>
+        <div class="form-row-3">
+          <div class="form-group"><label>Mobile</label><input id="f-mob" value="${esc(e.mobile_phone||'')}"></div>
+          <div class="form-group"><label>Personal email</label><input id="f-pe" type="email" value="${esc(e.personal_email||'')}"></div>
+          <div class="form-group"><label>Work email</label><input id="f-we" type="email" value="${esc(e.work_email||'')}"></div>
+        </div>
+      </fieldset>
+      <fieldset><legend>Employment</legend>
+        <div class="form-row-3">
+          <div class="form-group"><label>Employee number</label><input id="f-num" value="${esc(e.employee_number||'')}" placeholder="KP-000"></div>
+          <div class="form-group"><label class="req">Job title</label><input id="f-jt" value="${esc(e.job_title||'')}" required></div>
+          <div class="form-group"><label>Department</label><select id="f-dept">${DEPARTMENTS.map(d=>`<option ${e.department===d?'selected':''}>${d}</option>`).join('')}</select></div>
+        </div>
+        <div class="form-row-3">
+          <div class="form-group"><label>Site</label><select id="f-site">${SITES.map(s=>`<option ${e.site===s?'selected':''}>${s}</option>`).join('')}</select></div>
+          <div class="form-group"><label>Manager</label><select id="f-mgr"><option value="">—</option>${mgrs.map(m=>`<option value="${m.id}" ${e.manager_id===m.id?'selected':''}>${esc(m.first_name+' '+m.last_name)}</option>`).join('')}</select></div>
+          <div class="form-group"><label>Employment type</label><select id="f-type">${['Full-time','Part-time','Fixed-term','Apprentice','Contractor'].map(t=>`<option ${e.employment_type===t?'selected':''}>${t}</option>`).join('')}</select></div>
+        </div>
+        <div class="form-row-3">
+          <div class="form-group"><label class="req">Start date</label><input id="f-start" type="date" value="${esc(e.start_date||'')}" required></div>
+          <div class="form-group"><label>End date</label><input id="f-end" type="date" value="${esc(e.end_date||'')}"></div>
+          <div class="form-group"><label>Status</label><select id="f-status">${[['active','Active'],['on_leave','On leave'],['leaver','Leaver']].map(([v,t])=>`<option value="${v}" ${e.status===v?'selected':''}>${t}</option>`).join('')}</select></div>
+        </div>
+        <div class="form-row-3">
+          <div class="form-group"><label>Salary (£/yr)</label><input id="f-sal" type="number" value="${e.salary??''}"></div>
+          <div class="form-group"><label>Holiday allowance (days)</label><input id="f-hol" type="number" value="${e.holiday_allowance??DEFAULT_ALLOWANCE}"></div>
+          <div class="form-group"><label>Photo</label><input id="f-photo" type="file" accept="image/*"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Bank sort code</label><input id="f-sort" value="${esc(e.bank_sort_code||'')}"></div>
+          <div class="form-group"><label>Bank account</label><input id="f-acct" value="${esc(e.bank_account||'')}"></div>
+        </div>
+        <div class="form-group"><label>Notes</label><textarea id="f-notes" rows="2">${esc(e.notes||'')}</textarea></div>
+      </fieldset>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary">${id?'Save changes':'Add employee'}</button>
+      </div>
+    </form>`, true);
+}
+async function saveEmployee(ev, id){
+  ev.preventDefault();
+  const existing = id ? empById(id) : null;
+  let photo = existing?.photo || null;
+  const fileEl = document.getElementById('f-photo');
+  if (fileEl.files[0]) photo = await fileToDataURL(fileEl.files[0]);
+  const rec = {
+    id: id || uuid(),
+    employee_number: val('f-num'), first_name: val('f-fn'), last_name: val('f-ln'),
+    preferred_name: existing?.preferred_name||'',
+    date_of_birth: val('f-dob'), gender: val('f-gender'), ni_number: val('f-ni'),
+    address_line1: val('f-a1'), address_line2: val('f-a2'), city: val('f-city'), postcode: val('f-pc'),
+    personal_email: val('f-pe'), work_email: val('f-we'), mobile_phone: val('f-mob'), home_phone: existing?.home_phone||'',
+    job_title: val('f-jt'), department: val('f-dept'), site: val('f-site'),
+    manager_id: val('f-mgr')||null, employment_type: val('f-type'),
+    start_date: val('f-start'), end_date: val('f-end')||null, status: val('f-status'),
+    salary: numVal('f-sal'), pay_frequency: existing?.pay_frequency||'Annual',
+    bank_sort_code: val('f-sort'), bank_account: val('f-acct'),
+    holiday_allowance: numVal('f-hol') ?? DEFAULT_ALLOWANCE,
+    photo, notes: val('f-notes'),
+    created_at: existing?.created_at || nowISO(), updated_at: nowISO()
+  };
+  await idbPut('employees', rec);
+  await logAction(id?'employee_update':'employee_create', { employee_id: rec.id });
+  await refreshCaches();
+  closeModal();
+  toast(id?'Employee updated':'Employee added');
+  if (state.page==='employees'||state.page==='team') navigate(state.page);
+  else employeeDetail(rec.id);
+}
+function fileToDataURL(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); }); }
+
+// ── Contacts ──
+async function contactForm(empId, contactId){
+  let ct = {};
+  if (contactId){ const all = await idbByIndex('contacts','employee_id',empId); ct = all.find(x=>x.id===contactId)||{}; }
+  openModal(`<h2>${contactId?'Edit':'Add'} emergency contact</h2>
+    <form onsubmit="saveContact(event,'${empId}','${contactId||''}')">
+      <div class="form-group"><label class="req">Name</label><input id="ct-name" value="${esc(ct.name||'')}" required></div>
+      <div class="form-row"><div class="form-group"><label>Relationship</label><input id="ct-rel" value="${esc(ct.relationship||'')}" placeholder="Spouse, parent…"></div>
+      <div class="form-group"><label class="req">Phone</label><input id="ct-phone" value="${esc(ct.phone||'')}" required></div></div>
+      <div class="form-group"><label>Email</label><input id="ct-email" type="email" value="${esc(ct.email||'')}"></div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
+    </form>`);
+}
+async function saveContact(ev, empId, contactId){
+  ev.preventDefault();
+  await idbPut('contacts', { id: contactId||uuid(), employee_id: empId, name: val('ct-name'), relationship: val('ct-rel'), phone: val('ct-phone'), email: val('ct-email') });
+  closeModal(); toast('Contact saved');
+  empTab('contacts', [...document.querySelectorAll('#emp-tabs .tab')].find(t=>t.textContent.includes('contacts')));
+}
+async function deleteContact(id, empId){ if(!confirm('Delete this contact?'))return; await idbDelete('contacts',id); toast('Contact deleted'); empTab('contacts', [...document.querySelectorAll('#emp-tabs .tab')].find(t=>t.textContent.includes('contacts'))); }
+
+// ═══════════════════════════════════════════════
+// LEAVE / ABSENCE
+// ═══════════════════════════════════════════════
+async function renderLeave(c){
+  const isMgr = state.user.role==='manager';
+  const scope = isMgr ? teamMemberIds() : null;
+  let leave = await idbGetAll('leave');
+  if (scope) leave = leave.filter(l => scope.includes(l.employee_id));
+  const pending = leave.filter(l=>l.status==='pending').sort((a,b)=>a.start_date.localeCompare(b.start_date));
+  const upcoming = leave.filter(l=>l.status==='approved' && l.end_date>=today()).sort((a,b)=>a.start_date.localeCompare(b.start_date));
+  if (state.user.role==='hr_admin') setTopbar(`<button class="btn btn-accent" onclick="leaveForm()">+ Record leave</button>`);
+  c.innerHTML = `
+    <div class="card">
+      <div class="card-head"><h3>Awaiting approval (${pending.length})</h3></div>
+      ${pending.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Reason</th><th></th></tr></thead><tbody>${
+        pending.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td><td style="text-align:right"><button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')">Approve</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button></td></tr>`).join('')
+      }</tbody></table></div>`:'<div class="empty small">Nothing awaiting approval.</div>'}
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>Upcoming approved leave</h3></div>
+      ${upcoming.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Days</th></tr></thead><tbody>${
+        upcoming.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td></tr>`).join('')
+      }</tbody></table></div>`:'<div class="empty small">No upcoming leave.</div>'}
+    </div>`;
+}
+// Refresh the in-detail leave tab if open, otherwise re-render the current page.
+function refreshLeaveViews(){
+  const tabs = document.getElementById('emp-tabs');
+  if (tabs && window._detailEmp){
+    const t = [...tabs.querySelectorAll('.tab')].find(x=>x.textContent.includes('Holiday'));
+    if (t){ empTab('leave', t); return; }
+  }
+  navigate(state.page);
+}
+async function decideLeave(id, decision){
+  const l = (await idbGetAll('leave')).find(x=>x.id===id);
+  if (!l) return;
+  l.status = decision; l.decided_by = state.user.username; l.decided_at = nowISO();
+  await idbPut('leave', l);
+  await logAction('leave_'+decision, { employee_id:l.employee_id, leave_id:id });
+  toast('Leave '+decision);
+  refreshLeaveViews();
+}
+async function deleteLeave(id){ if(!confirm('Delete this leave record?'))return; await idbDelete('leave',id); toast('Deleted'); refreshLeaveViews(); }
+
+async function leaveForm(presetEmp, asEmployee){
+  const empOptions = state.employees.filter(e=>e.status!=='leaver');
+  const isSelf = asEmployee === true;
+  openModal(`<h2>${isSelf?'Book holiday':'Record leave / absence'}</h2>
+    <form onsubmit="saveLeave(event, ${isSelf})">
+      ${isSelf?'':`<div class="form-group"><label class="req">Employee</label><select id="lv-emp" required><option value="">Select…</option>${empOptions.map(e=>`<option value="${e.id}" ${presetEmp===e.id?'selected':''}>${esc(e.first_name+' '+e.last_name)}</option>`).join('')}</select></div>`}
+      <div class="form-row">
+        <div class="form-group"><label class="req">Type</label><select id="lv-type" onchange="recalcLeaveDays()">${Object.entries(LEAVE_TYPES).filter(([k])=>isSelf?k==='holiday':true).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('')}</select></div>
+        <div class="form-group"><label>Half day</label><select id="lv-half" onchange="recalcLeaveDays()"><option value="false">No</option><option value="true">Yes (single day)</option></select></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="req">From</label><input id="lv-start" type="date" value="${today()}" onchange="recalcLeaveDays()" required></div>
+        <div class="form-group"><label class="req">To</label><input id="lv-end" type="date" value="${today()}" onchange="recalcLeaveDays()" required></div>
+      </div>
+      <div class="form-group"><label>Working days</label><input id="lv-days" type="number" step="0.5" value="1"><div class="small muted">Auto-calculated (Mon–Fri). Adjust if needed.</div></div>
+      <div class="form-group"><label>Reason / notes</label><textarea id="lv-reason" rows="2"></textarea></div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">${isSelf?'Submit request':'Save'}</button></div>
+    </form>`);
+  recalcLeaveDays();
+}
+function recalcLeaveDays(){
+  const half = val('lv-half')==='true';
+  const s = val('lv-start'), e = val('lv-end');
+  let d = workingDays(s,e);
+  if (half) d = 0.5;
+  document.getElementById('lv-days').value = d;
+}
+async function saveLeave(ev, isSelf){
+  ev.preventDefault();
+  const empId = isSelf ? state.user.employee_id : val('lv-emp');
+  if (!empId){ toast('Select an employee','error'); return; }
+  const type = val('lv-type');
+  const rec = {
+    id: uuid(), employee_id: empId, type,
+    start_date: val('lv-start'), end_date: val('lv-end'),
+    days: Number(val('lv-days'))||0, half_day: val('lv-half')==='true',
+    status: isSelf ? 'pending' : (type==='holiday' ? 'approved' : 'approved'),
+    reason: val('lv-reason'),
+    requested_at: nowISO(),
+    decided_by: isSelf?null:state.user.username, decided_at: isSelf?null:nowISO(), decision_note:''
+  };
+  await idbPut('leave', rec);
+  await logAction('leave_create', { employee_id:empId, leave_id:rec.id });
+  closeModal();
+  toast(isSelf?'Holiday request submitted':'Leave recorded');
+  if (state.page) navigate(state.page);
+}
+
+// ═══════════════════════════════════════════════
+// PERFORMANCE (org-wide view)
+// ═══════════════════════════════════════════════
+async function renderPerformance(c){
+  const isMgr = state.user.role==='manager';
+  const scope = isMgr ? teamMemberIds() : state.employees.map(e=>e.id);
+  let reviews = (await idbGetAll('reviews')).filter(r=>scope.includes(r.employee_id));
+  let objectives = (await idbGetAll('objectives')).filter(o=>scope.includes(o.employee_id));
+  const due = reviews.filter(r=>r.status!=='completed').sort((a,b)=>(a.scheduled_date||'').localeCompare(b.scheduled_date||''));
+  const activeObj = objectives.filter(o=>o.status==='in_progress'||o.status==='not_started');
+  c.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat info"><div class="num">${due.length}</div><div class="lbl">Reviews outstanding</div></div>
+      <div class="stat"><div class="num">${reviews.filter(r=>r.status==='completed').length}</div><div class="lbl">Reviews completed</div></div>
+      <div class="stat ok"><div class="num">${activeObj.length}</div><div class="lbl">Active objectives</div></div>
+    </div>
+    <div class="card"><div class="card-head"><h3>Reviews & appraisals</h3></div>
+      ${reviews.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Type</th><th>Period</th><th>Scheduled</th><th>Status</th><th></th></tr></thead><tbody>${
+        reviews.sort((a,b)=>(b.scheduled_date||'').localeCompare(a.scheduled_date||'')).map(r=>`<tr><td>${esc(empName(r.employee_id))}</td><td>${r.type==='annual'?'Annual appraisal':'Mid-year review'}</td><td>${esc(r.period)}</td><td>${fmtDate(r.scheduled_date)}</td><td>${reviewStatusBadge(r.status)}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="reviewForm('${r.employee_id}','${r.id}')">Open</button></td></tr>`).join('')
+      }</tbody></table></div>`:'<div class="empty small">No reviews scheduled. Open an employee record to schedule one.</div>'}
+    </div>
+    <div class="card"><div class="card-head"><h3>Objectives across ${isMgr?'your team':'the company'}</h3></div>
+      ${objectives.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Objective</th><th>Target</th><th>Progress</th><th>Status</th></tr></thead><tbody>${
+        objectives.sort((a,b)=>(a.target_date||'').localeCompare(b.target_date||'')).map(o=>`<tr><td>${esc(empName(o.employee_id))}</td><td>${esc(o.title)}</td><td>${fmtDate(o.target_date)}</td><td><div class="progress"><div style="width:${o.progress}%"></div></div></td><td>${objStatusBadge(o.status)}</td></tr>`).join('')
+      }</tbody></table></div>`:'<div class="empty small">No objectives set.</div>'}
+    </div>`;
+}
+function reviewForm(empId, reviewId){
+  const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(empId)) ;
+  idbGetAll('reviews').then(all=>{
+    const r = reviewId ? all.find(x=>x.id===reviewId) : {};
+    const ro = !canManage; // employee read-only except self-assessment
+    const isOwn = state.user.employee_id === empId;
+    openModal(`<h2>${reviewId?'Review':'Schedule review'}</h2>
+      <div class="modal-sub">${esc(empName(empId))}</div>
+      <form onsubmit="saveReview(event,'${empId}','${reviewId||''}')">
+        <div class="form-row">
+          <div class="form-group"><label>Type</label><select id="rv-type" ${ro?'disabled':''}>${[['annual','Annual appraisal'],['mid_year','Mid-year review']].map(([v,t])=>`<option value="${v}" ${r.type===v?'selected':''}>${t}</option>`).join('')}</select></div>
+          <div class="form-group"><label>Period</label><input id="rv-period" value="${esc(r.period||thisYear())}" ${ro?'disabled':''}></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Scheduled date</label><input id="rv-date" type="date" value="${esc(r.scheduled_date||'')}" ${ro?'disabled':''}></div>
+          <div class="form-group"><label>Status</label><select id="rv-status" ${ro?'disabled':''}>${[['scheduled','Scheduled'],['in_progress','In progress'],['completed','Completed']].map(([v,t])=>`<option value="${v}" ${r.status===v?'selected':''}>${t}</option>`).join('')}</select></div>
+        </div>
+        <div class="form-group"><label>Employee self-assessment</label><textarea id="rv-self" rows="3" ${(ro&&!isOwn)?'disabled':''}>${esc(r.self_assessment||'')}</textarea></div>
+        <div class="form-group"><label>Manager comments</label><textarea id="rv-mgr" rows="3" ${ro?'disabled':''}>${esc(r.manager_comments||'')}</textarea></div>
+        <div class="form-group"><label>Overall rating</label><select id="rv-rating" ${ro?'disabled':''}><option value="">—</option>${['Exceptional','Exceeds expectations','Meets expectations','Needs improvement','Unsatisfactory'].map(x=>`<option ${r.overall_rating===x?'selected':''}>${x}</option>`).join('')}</select></div>
+        <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Close</button>${(canManage||isOwn)?`<button type="submit" class="btn btn-primary">Save</button>`:''}</div>
+      </form>`);
+  });
+}
+async function saveReview(ev, empId, reviewId){
+  ev.preventDefault();
+  const all = await idbGetAll('reviews');
+  const existing = reviewId ? all.find(x=>x.id===reviewId) : null;
+  const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(empId));
+  const rec = {
+    id: reviewId||uuid(), employee_id: empId,
+    type: canManage? val('rv-type') : (existing?.type||'annual'),
+    period: canManage? val('rv-period') : (existing?.period||thisYear()),
+    scheduled_date: canManage? val('rv-date') : (existing?.scheduled_date||''),
+    status: canManage? val('rv-status') : (existing?.status||'scheduled'),
+    reviewer_id: existing?.reviewer_id || state.user.employee_id || null,
+    self_assessment: val('rv-self'),
+    manager_comments: canManage? val('rv-mgr') : (existing?.manager_comments||''),
+    overall_rating: canManage? val('rv-rating') : (existing?.overall_rating||''),
+    completed_at: (canManage && val('rv-status')==='completed') ? nowISO() : (existing?.completed_at||null),
+    created_at: existing?.created_at || nowISO()
+  };
+  await idbPut('reviews', rec);
+  await logAction('review_save', { employee_id:empId, review_id:rec.id });
+  closeModal(); toast('Review saved');
+  refreshAfterDetail('Performance','performance');
+}
+function objectiveForm(empId, objId){
+  idbGetAll('objectives').then(all=>{
+    const o = objId ? all.find(x=>x.id===objId) : {};
+    openModal(`<h2>${objId?'Edit':'Add'} objective</h2><div class="modal-sub">${esc(empName(empId))}</div>
+      <form onsubmit="saveObjective(event,'${empId}','${objId||''}')">
+        <div class="form-group"><label class="req">Title</label><input id="ob-title" value="${esc(o.title||'')}" required></div>
+        <div class="form-group"><label>Description</label><textarea id="ob-desc" rows="2">${esc(o.description||'')}</textarea></div>
+        <div class="form-row">
+          <div class="form-group"><label>Target date</label><input id="ob-date" type="date" value="${esc(o.target_date||'')}"></div>
+          <div class="form-group"><label>Status</label><select id="ob-status">${[['not_started','Not started'],['in_progress','In progress'],['achieved','Achieved'],['cancelled','Cancelled']].map(([v,t])=>`<option value="${v}" ${o.status===v?'selected':''}>${t}</option>`).join('')}</select></div>
+        </div>
+        <div class="form-group"><label>Progress: <span id="ob-pval">${o.progress||0}</span>%</label><input id="ob-prog" type="range" min="0" max="100" value="${o.progress||0}" oninput="document.getElementById('ob-pval').textContent=this.value"></div>
+        <div class="modal-actions">${objId?`<button type="button" class="btn btn-danger" style="margin-right:auto" onclick="deleteObjective('${objId}','${empId}')">Delete</button>`:''}<button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
+      </form>`);
+  });
+}
+async function saveObjective(ev, empId, objId){
+  ev.preventDefault();
+  const all = await idbGetAll('objectives');
+  const existing = objId ? all.find(x=>x.id===objId) : null;
+  await idbPut('objectives', { id: objId||uuid(), employee_id: empId, title: val('ob-title'), description: val('ob-desc'), target_date: val('ob-date'), status: val('ob-status'), progress: Number(document.getElementById('ob-prog').value), created_at: existing?.created_at||nowISO() });
+  closeModal(); toast('Objective saved');
+  refreshAfterDetail('Performance','performance');
+}
+async function deleteObjective(id, empId){ if(!confirm('Delete this objective?'))return; await idbDelete('objectives',id); closeModal(); toast('Deleted'); refreshAfterDetail('Performance','performance'); }
+
+function refreshAfterDetail(tabText, page){
+  if (window._detailEmp){ const t=[...document.querySelectorAll('#emp-tabs .tab')].find(x=>x.textContent.trim()===tabText||x.textContent.includes(tabText)); if(t){ empTab(tabText==='Performance'?'performance':'leave', t); return; } }
+  navigate(state.page);
+}
+
+// ═══════════════════════════════════════════════
+// DOCUMENTS
+// ═══════════════════════════════════════════════
+const DOC_CATEGORIES = { policy:'Policy', handbook:'Handbook', form:'Form', contract:'Contract', reference:'Reference letter', other:'Other' };
+function docIcon(mime){ if(!mime) return '📄'; if(mime.includes('pdf'))return '📕'; if(mime.includes('image'))return '🖼'; if(mime.includes('word')||mime.includes('document'))return '📘'; if(mime.includes('sheet')||mime.includes('excel'))return '📗'; return '📄'; }
+function docRow(d, canEdit){
+  return `<div class="doc-row"><div class="dic">${docIcon(d.mime_type)}</div><div class="di"><div class="t">${esc(d.title)} <span class="badge b-grey">${DOC_CATEGORIES[d.category]||d.category}</span></div><div class="small muted">${esc(d.description)||esc(d.filename)} · ${fmtDate(d.uploaded_at)}</div></div><button class="btn btn-outline btn-sm" onclick="downloadDoc('${d.id}')">Download</button>${canEdit?` <button class="btn btn-danger btn-sm" onclick="deleteDoc('${d.id}')">×</button>`:''}</div>`;
+}
+async function renderDocuments(c){
+  const canEdit = state.user.role==='hr_admin';
+  const all = (await idbGetAll('documents')).filter(d=>!d.employee_id); // company-wide only here
+  if (canEdit) setTopbar(`<button class="btn btn-accent" onclick="documentForm()">+ Upload document</button>`);
+  const cats = Object.keys(DOC_CATEGORIES);
+  window._companyDocs = all;
+  c.innerHTML = `
+    <div class="pill-tabs" id="doc-pills">
+      <div class="pill active" onclick="filterDocs('',this)">All (${all.length})</div>
+      ${cats.map(cat=>{ const n=all.filter(d=>d.category===cat).length; return n?`<div class="pill" onclick="filterDocs('${cat}',this)">${DOC_CATEGORIES[cat]} (${n})</div>`:''; }).join('')}
+    </div>
+    <div class="card" id="doc-list"></div>`;
+  filterDocs('', document.querySelector('#doc-pills .pill'));
+}
+function filterDocs(cat, el){
+  document.querySelectorAll('#doc-pills .pill').forEach(p=>p.classList.remove('active'));
+  el.classList.add('active');
+  const canEdit = state.user.role==='hr_admin';
+  const list = cat ? window._companyDocs.filter(d=>d.category===cat) : window._companyDocs;
+  document.getElementById('doc-list').innerHTML = list.length ? list.sort((a,b)=>a.title.localeCompare(b.title)).map(d=>docRow(d,canEdit)).join('') : '<div class="empty small">No documents in this category.</div>';
+}
+function documentForm(empId){
+  const isEmp = !!empId;
+  openModal(`<h2>Upload document</h2><div class="modal-sub">${isEmp?esc(empName(empId)):'Company-wide document'}</div>
+    <form onsubmit="saveDoc(event,'${empId||''}')">
+      <div class="form-group"><label class="req">Title</label><input id="dc-title" required></div>
+      <div class="form-group"><label>Category</label><select id="dc-cat">${Object.entries(DOC_CATEGORIES).map(([v,t])=>`<option value="${v}" ${(isEmp&&v==='contract')||(!isEmp&&v==='policy')?'selected':''}>${t}</option>`).join('')}</select></div>
+      <div class="form-group"><label>Description</label><input id="dc-desc"></div>
+      <div class="form-group"><label class="req">File</label><input id="dc-file" type="file" required></div>
+      <div class="small muted">Stored locally in this browser. Large files increase storage use.</div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Upload</button></div>
+    </form>`);
+}
+async function saveDoc(ev, empId){
+  ev.preventDefault();
+  const file = document.getElementById('dc-file').files[0];
+  if (!file){ toast('Choose a file','error'); return; }
+  const data = await fileToDataURL(file);
+  await idbPut('documents', { id:uuid(), employee_id: empId||null, category: val('dc-cat'), title: val('dc-title'), filename: file.name, mime_type: file.type, data, description: val('dc-desc'), uploaded_by: state.user.username, uploaded_at: nowISO() });
+  await logAction('document_upload', { employee_id: empId||null });
+  closeModal(); toast('Document uploaded');
+  if (empId){ empTab('documents', [...document.querySelectorAll('#emp-tabs .tab')].find(t=>t.textContent.includes('Documents'))); }
+  else navigate('documents');
+}
+async function downloadDoc(id){
+  const d = await idbGet('documents', id);
+  if (!d) return;
+  const a = document.createElement('a'); a.href = d.data; a.download = d.filename || (d.title+'.bin'); a.click();
+  await logAction('document_download', { document_id:id });
+}
+async function deleteDoc(id){ if(!confirm('Delete this document?'))return; const d=await idbGet('documents',id); await idbDelete('documents',id); toast('Deleted'); if(d&&d.employee_id){ empTab('documents',[...document.querySelectorAll('#emp-tabs .tab')].find(t=>t.textContent.includes('Documents'))); } else navigate('documents'); }
+
+// ═══════════════════════════════════════════════
+// REPORTS
+// ═══════════════════════════════════════════════
+async function renderReports(c){
+  const emps = state.employees;
+  const active = emps.filter(e=>e.status==='active');
+  const leave = await idbGetAll('leave');
+  const bounds = await holidayYearBounds();
+
+  // Headcount by site / dept
+  const bySite = {}; const byDept = {};
+  active.forEach(e=>{ bySite[e.site]=(bySite[e.site]||0)+1; byDept[e.department]=(byDept[e.department]||0)+1; });
+
+  // Absence: sickness in current holiday year
+  const sick = leave.filter(l=>l.type==='sickness' && l.status==='approved' && l.start_date>=bounds.start && l.start_date<=bounds.end);
+  const sickDays = sick.reduce((a,l)=>a+l.days,0);
+  const sickInstances = sick.length;
+  // approx working days available = active * ~260
+  const workDaysAvail = active.length * 260;
+  const absenceRate = workDaysAvail ? (sickDays/workDaysAvail*100) : 0;
+
+  // Retention: starters & leavers in current calendar year
+  const yr = thisYear();
+  const starters = emps.filter(e=>e.start_date && e.start_date.slice(0,4)===yr).length;
+  const leavers = emps.filter(e=>e.end_date && e.end_date.slice(0,4)===yr).length;
+  const turnover = active.length ? (leavers/((active.length+leavers))*100) : 0;
+
+  c.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat"><div class="num">${active.length}</div><div class="lbl">Current employees</div></div>
+      <div class="stat ${absenceRate>3?'warn':'ok'}"><div class="num">${absenceRate.toFixed(1)}%</div><div class="lbl">Absence rate (${bounds.label})</div></div>
+      <div class="stat info"><div class="num">${starters}</div><div class="lbl">Starters ${yr}</div></div>
+      <div class="stat ${leavers?'warn':'ok'}"><div class="num">${leavers}</div><div class="lbl">Leavers ${yr}</div></div>
+      <div class="stat"><div class="num">${turnover.toFixed(1)}%</div><div class="lbl">Turnover ${yr}</div></div>
+    </div>
+
+    <div class="form-row">
+      <div class="card"><div class="card-head"><h3>Headcount by site</h3></div>
+        <table><tbody>${SITES.map(s=>`<tr><td>${s}</td><td style="text-align:right"><strong>${bySite[s]||0}</strong></td></tr>`).join('')}</tbody></table>
+      </div>
+      <div class="card"><div class="card-head"><h3>Headcount by department</h3></div>
+        <table><tbody>${Object.keys(byDept).sort().map(d=>`<tr><td>${esc(d)}</td><td style="text-align:right"><strong>${byDept[d]}</strong></td></tr>`).join('')||'<tr><td class="muted">—</td></tr>'}</tbody></table>
+      </div>
+    </div>
+
+    <div class="card"><div class="card-head"><h3>Absence summary (${bounds.label})</h3><button class="btn btn-outline btn-sm" onclick="exportAbsence()">Export CSV</button></div>
+      <div class="stat-grid">
+        <div class="stat warn"><div class="num">${sickDays}</div><div class="lbl">Total sick days</div></div>
+        <div class="stat"><div class="num">${sickInstances}</div><div class="lbl">Absence instances</div></div>
+        <div class="stat"><div class="num">${active.length?(sickDays/active.length).toFixed(1):0}</div><div class="lbl">Avg days / employee</div></div>
+      </div>
+    </div>
+
+    <div class="card"><div class="card-head"><h3>Annual leave balances</h3><button class="btn btn-outline btn-sm" onclick="exportLeaveBalances()">Export CSV</button></div>
+      <div class="table-wrap"><table id="rep-leave"><thead><tr><th>Employee</th><th>Site</th><th>Allowance</th><th>Taken</th><th>Pending</th><th>Remaining</th></tr></thead><tbody><tr><td colspan="6" class="muted">Loading…</td></tr></tbody></table></div>
+    </div>
+
+    <div class="card"><div class="card-head"><h3>Current employees</h3><button class="btn btn-outline btn-sm" onclick="exportHeadcount()">Export CSV</button></div>
+      <div class="table-wrap"><table><thead><tr><th>No.</th><th>Name</th><th>Job title</th><th>Dept</th><th>Site</th><th>Start date</th><th>Service</th></tr></thead><tbody>${
+        active.sort((a,b)=>a.last_name.localeCompare(b.last_name)).map(e=>`<tr><td>${esc(e.employee_number)}</td><td>${esc(e.first_name+' '+e.last_name)}</td><td>${esc(e.job_title)}</td><td>${esc(e.department)}</td><td>${esc(e.site)}</td><td>${fmtDate(e.start_date)}</td><td>${serviceYears(e.start_date)}</td></tr>`).join('')
+      }</tbody></table></div>
+    </div>`;
+
+  // fill leave balances async
+  const tb = document.querySelector('#rep-leave tbody');
+  const rows = [];
+  for (const e of active.sort((a,b)=>a.last_name.localeCompare(b.last_name))){
+    const b = await leaveBalance(e.id);
+    rows.push(`<tr><td>${esc(e.first_name+' '+e.last_name)}</td><td>${esc(e.site)}</td><td>${b.allowance}</td><td>${b.taken}</td><td>${b.pending}</td><td><strong>${b.remaining}</strong></td></tr>`);
+  }
+  tb.innerHTML = rows.join('') || '<tr><td colspan="6" class="muted">—</td></tr>';
+}
+function serviceYears(start){ if(!start) return '—'; const d=new Date(start); const y=(Date.now()-d)/(365.25*24*3600*1000); return y<1?`${Math.round(y*12)} mo`:`${y.toFixed(1)} yr`; }
+function exportHeadcount(){
+  const rows = [['Number','First name','Last name','Job title','Department','Site','Employment type','Start date','Status']];
+  state.employees.filter(e=>e.status==='active').forEach(e=>rows.push([e.employee_number,e.first_name,e.last_name,e.job_title,e.department,e.site,e.employment_type,e.start_date,e.status]));
+  downloadCSV('komfort-headcount.csv', rows);
+}
+async function exportLeaveBalances(){
+  const rows = [['Employee','Site','Allowance','Taken','Pending','Remaining']];
+  for (const e of state.employees.filter(x=>x.status==='active')){ const b=await leaveBalance(e.id); rows.push([e.first_name+' '+e.last_name,e.site,b.allowance,b.taken,b.pending,b.remaining]); }
+  downloadCSV('komfort-leave-balances.csv', rows);
+}
+async function exportAbsence(){
+  const bounds = await holidayYearBounds();
+  const leave = (await idbGetAll('leave')).filter(l=>l.type==='sickness' && l.status==='approved' && l.start_date>=bounds.start && l.start_date<=bounds.end);
+  const rows = [['Employee','From','To','Days','Reason']];
+  leave.forEach(l=>rows.push([empName(l.employee_id),l.start_date,l.end_date,l.days,l.reason]));
+  downloadCSV('komfort-absence.csv', rows);
+}
+
+// ═══════════════════════════════════════════════
+// TASKS
+// ═══════════════════════════════════════════════
+async function renderTasks(c){
+  let tasks = await idbGetAll('tasks');
+  if (state.user.role==='manager') tasks = tasks.filter(t=>t.assigned_to===state.user.id);
+  setTopbar(`<button class="btn btn-accent" onclick="taskForm()">+ New task</button>`);
+  const open = tasks.filter(t=>t.status!=='done').sort((a,b)=>(a.due_date||'').localeCompare(b.due_date||''));
+  const done = tasks.filter(t=>t.status==='done');
+  const overdue = open.filter(t=>t.due_date && t.due_date<today());
+  c.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat"><div class="num">${open.length}</div><div class="lbl">Open tasks</div></div>
+      <div class="stat ${overdue.length?'warn':'ok'}"><div class="num">${overdue.length}</div><div class="lbl">Overdue</div></div>
+      <div class="stat ok"><div class="num">${done.length}</div><div class="lbl">Completed</div></div>
+    </div>
+    <div class="card"><div class="card-head"><h3>Open tasks</h3></div>
+      ${open.length?`<div class="table-wrap"><table><thead><tr><th>Task</th><th>Related to</th><th>Assigned</th><th>Due</th><th>Priority</th><th>Status</th><th></th></tr></thead><tbody>${
+        open.map(t=>`<tr><td><strong>${esc(t.title)}</strong>${t.due_date&&t.due_date<today()?' <span class="badge b-red">Overdue</span>':''}<div class="small muted">${esc(t.description)||''}</div></td><td>${t.related_employee_id?esc(empName(t.related_employee_id)):'—'}</td><td class="small">${esc(state.usersById[t.assigned_to]?.full_name||'—')}</td><td>${fmtDate(t.due_date)}</td><td>${priorityBadge(t.priority)}</td><td>${taskStatusBadge(t.status)}</td><td style="text-align:right;white-space:nowrap"><button class="btn btn-success btn-sm" onclick="completeTask('${t.id}')">Done</button> <button class="btn btn-outline btn-sm" onclick="taskForm('${t.id}')">Edit</button></td></tr>`).join('')
+      }</tbody></table></div>`:'<div class="empty small">No open tasks. 🎉</div>'}
+    </div>
+    ${done.length?`<div class="card"><div class="card-head"><h3>Completed (${done.length})</h3></div><div class="table-wrap"><table><tbody>${
+      done.sort((a,b)=>(b.completed_at||'').localeCompare(a.completed_at||'')).slice(0,15).map(t=>`<tr><td style="text-decoration:line-through;color:var(--text-light)">${esc(t.title)}</td><td class="small muted">Completed ${fmtDate(t.completed_at)}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="reopenTask('${t.id}')">Reopen</button> <button class="btn btn-danger btn-sm" onclick="deleteTask('${t.id}')">×</button></td></tr>`).join('')
+    }</tbody></table></div></div>`:''}`;
+}
+function taskStatusBadge(s){ const m={open:['Open','b-blue'],in_progress:['In progress','b-amber'],done:['Done','b-green']}; const [t,c]=m[s]||[s,'b-grey']; return `<span class="badge ${c}">${t}</span>`; }
+async function taskForm(id){
+  const all = await idbGetAll('tasks');
+  const t = id ? all.find(x=>x.id===id) : {};
+  const users = Object.values(state.usersById);
+  openModal(`<h2>${id?'Edit':'New'} task</h2>
+    <form onsubmit="saveTask(event,'${id||''}')">
+      <div class="form-group"><label class="req">Title</label><input id="tk-title" value="${esc(t.title||'')}" required></div>
+      <div class="form-group"><label>Description</label><textarea id="tk-desc" rows="2">${esc(t.description||'')}</textarea></div>
+      <div class="form-row">
+        <div class="form-group"><label>Assigned to</label><select id="tk-assign">${users.map(u=>`<option value="${u.id}" ${(t.assigned_to||state.user.id)===u.id?'selected':''}>${esc(u.full_name)} (${roleLabel(u.role)})</option>`).join('')}</select></div>
+        <div class="form-group"><label>Related employee</label><select id="tk-emp"><option value="">—</option>${state.employees.map(e=>`<option value="${e.id}" ${t.related_employee_id===e.id?'selected':''}>${esc(e.first_name+' '+e.last_name)}</option>`).join('')}</select></div>
+      </div>
+      <div class="form-row-3">
+        <div class="form-group"><label>Due date</label><input id="tk-due" type="date" value="${esc(t.due_date||'')}"></div>
+        <div class="form-group"><label>Reminder date</label><input id="tk-rem" type="date" value="${esc(t.reminder_date||'')}"></div>
+        <div class="form-group"><label>Priority</label><select id="tk-pri">${[['high','High'],['medium','Medium'],['low','Low']].map(([v,l])=>`<option value="${v}" ${ (t.priority||'medium')===v?'selected':''}>${l}</option>`).join('')}</select></div>
+      </div>
+      <div class="form-group"><label>Status</label><select id="tk-status">${[['open','Open'],['in_progress','In progress'],['done','Done']].map(([v,l])=>`<option value="${v}" ${(t.status||'open')===v?'selected':''}>${l}</option>`).join('')}</select></div>
+      <div class="modal-actions">${id?`<button type="button" class="btn btn-danger" style="margin-right:auto" onclick="deleteTask('${id}')">Delete</button>`:''}<button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
+    </form>`);
+}
+async function saveTask(ev, id){
+  ev.preventDefault();
+  const all = await idbGetAll('tasks');
+  const existing = id ? all.find(x=>x.id===id) : null;
+  const status = val('tk-status');
+  await idbPut('tasks', { id:id||uuid(), title:val('tk-title'), description:val('tk-desc'), assigned_to:val('tk-assign'), related_employee_id:val('tk-emp')||null, due_date:val('tk-due')||null, reminder_date:val('tk-rem')||null, priority:val('tk-pri'), status, created_at:existing?.created_at||nowISO(), completed_at: status==='done'?(existing?.completed_at||nowISO()):null });
+  closeModal(); toast('Task saved'); navigate(state.page);
+}
+async function completeTask(id){ const t=(await idbGetAll('tasks')).find(x=>x.id===id); t.status='done'; t.completed_at=nowISO(); await idbPut('tasks',t); toast('Task completed'); navigate(state.page); }
+async function reopenTask(id){ const t=(await idbGetAll('tasks')).find(x=>x.id===id); t.status='open'; t.completed_at=null; await idbPut('tasks',t); navigate(state.page); }
+async function deleteTask(id){ if(!confirm('Delete this task?'))return; await idbDelete('tasks',id); closeModal(); toast('Deleted'); navigate(state.page); }
+
+// ═══════════════════════════════════════════════
+// USER ACCOUNTS (HR admin)
+// ═══════════════════════════════════════════════
+async function renderUsers(c){
+  const users = await idbGetAll('users');
+  setTopbar(`<button class="btn btn-accent" onclick="userForm()">+ New account</button>`);
+  c.innerHTML = `<div class="card"><div class="card-head"><h3>Login accounts</h3></div>
+    <div class="table-wrap"><table><thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Linked employee</th><th></th></tr></thead><tbody>${
+      users.sort((a,b)=>a.username.localeCompare(b.username)).map(u=>`<tr><td><strong>${esc(u.username)}</strong></td><td>${esc(u.full_name)}</td><td><span class="badge b-blue">${roleLabel(u.role)}</span></td><td>${u.employee_id?esc(empName(u.employee_id)):'—'}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="userForm('${u.id}')">Edit</button> <button class="btn btn-outline btn-sm" onclick="resetPwd('${u.id}')">Reset password</button>${u.username!=='admin'?` <button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}')">×</button>`:''}</td></tr>`).join('')
+    }</tbody></table></div></div>
+    <div class="card"><p class="small muted">Tip: when you add an employee, create them a matching <strong>Employee</strong> account here and link it to their record so they can use the self-service portal.</p></div>`;
+}
+async function userForm(id){
+  const all = await idbGetAll('users');
+  const u = id ? all.find(x=>x.id===id) : {};
+  const unlinkedEmps = state.employees;
+  openModal(`<h2>${id?'Edit':'New'} account</h2>
+    <form onsubmit="saveUser(event,'${id||''}')">
+      <div class="form-row">
+        <div class="form-group"><label class="req">Username</label><input id="us-username" value="${esc(u.username||'')}" required ${u.username==='admin'?'readonly':''}></div>
+        <div class="form-group"><label class="req">Full name</label><input id="us-name" value="${esc(u.full_name||'')}" required></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Role</label><select id="us-role" onchange="toggleUserEmp()">${[['hr_admin','HR Admin'],['manager','Manager'],['employee','Employee']].map(([v,l])=>`<option value="${v}" ${ (u.role||'employee')===v?'selected':''}>${l}</option>`).join('')}</select></div>
+        <div class="form-group"><label>Linked employee</label><select id="us-emp"><option value="">—</option>${unlinkedEmps.map(e=>`<option value="${e.id}" ${u.employee_id===e.id?'selected':''}>${esc(e.first_name+' '+e.last_name)}</option>`).join('')}</select></div>
+      </div>
+      ${id?'':`<div class="form-group"><label class="req">Temporary password</label><input id="us-pwd" value="Welcome123" required></div>`}
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
+    </form>`);
+}
+function toggleUserEmp(){}
+async function saveUser(ev, id){
+  ev.preventDefault();
+  const all = await idbGetAll('users');
+  const existing = id ? all.find(x=>x.id===id) : null;
+  const username = val('us-username').toLowerCase();
+  if (!existing && all.some(x=>x.username.toLowerCase()===username)){ toast('Username already exists','error'); return; }
+  let password_hash = existing?.password_hash;
+  if (!id) password_hash = await sha256(val('us-pwd'));
+  await idbPut('users', { id:id||uuid(), username, password_hash, role:val('us-role'), employee_id:val('us-emp')||null, full_name:val('us-name'), must_change_password: !id, created_at:existing?.created_at||nowISO() });
+  await logAction(id?'user_update':'user_create', { username });
+  await refreshCaches();
+  closeModal(); toast('Account saved'); navigate('users');
+}
+async function resetPwd(id){
+  const np = prompt('Enter a new temporary password:', 'Welcome123');
+  if (!np) return;
+  const u = (await idbGetAll('users')).find(x=>x.id===id);
+  u.password_hash = await sha256(np); u.must_change_password = true;
+  await idbPut('users', u);
+  await logAction('password_reset', { username:u.username });
+  toast('Password reset');
+}
+async function deleteUser(id){ const u=(await idbGetAll('users')).find(x=>x.id===id); if(u.username==='admin'){toast('Cannot delete admin','error');return;} if(!confirm('Delete this account?'))return; await idbDelete('users',id); await refreshCaches(); toast('Account deleted'); navigate('users'); }
+
+// ═══════════════════════════════════════════════
+// SETTINGS
+// ═══════════════════════════════════════════════
+async function renderSettings(c){
+  const hys = await getSetting('holiday_year_start','01-01');
+  const cn = await getSetting('company_name','Komfort Partitioning Ltd');
+  c.innerHTML = `
+    <div class="card" style="max-width:560px">
+      <div class="card-head"><h3>Company settings</h3></div>
+      <div class="form-group"><label>Company name</label><input id="set-cn" value="${esc(cn)}"></div>
+      <div class="form-group"><label>Holiday year starts (MM-DD)</label><input id="set-hys" value="${esc(hys)}" placeholder="01-01"><div class="small muted">e.g. 01-01 for calendar year, 04-01 for April start.</div></div>
+      <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
+    </div>
+    <div class="card" style="max-width:560px">
+      <div class="card-head"><h3>Data</h3></div>
+      <p class="small muted">All data is stored locally in this browser (IndexedDB). Use export to back up, or reset to clear everything.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn btn-outline" onclick="exportAllData()">Export all data (JSON)</button>
+        <button class="btn btn-danger" onclick="resetAllData()">Reset all data</button>
+      </div>
+    </div>`;
+}
+async function saveSettings(){ await setSetting('company_name', val('set-cn')); await setSetting('holiday_year_start', val('set-hys')||'01-01'); toast('Settings saved'); }
+async function exportAllData(){
+  const dump = {};
+  for (const s of STORES) dump[s] = await idbGetAll(s);
+  const blob = new Blob([JSON.stringify(dump,null,2)], {type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='komfort-hr-backup-'+today()+'.json'; a.click(); URL.revokeObjectURL(a.href);
+}
+async function resetAllData(){
+  if (!confirm('This deletes ALL HR data in this browser and reloads demo data. Continue?')) return;
+  for (const s of STORES){ const all = await idbGetAll(s); for (const r of all){ await idbDelete(s, r[(s==='settings')?'key':'id']); } }
+  await seedDefaults(); toast('Data reset'); logout();
+}
+
+// ═══════════════════════════════════════════════
+// EMPLOYEE SELF-SERVICE
+// ═══════════════════════════════════════════════
+async function renderMyProfile(c){
+  const id = state.user.employee_id;
+  if (!id){ c.innerHTML='<div class="empty">No employee record is linked to your account. Ask HR to link it.</div>'; return; }
+  const e = empById(id);
+  const contacts = await idbByIndex('contacts','employee_id',id);
+  c.innerHTML = `
+    <div class="card"><div class="detail-head">${avatarHtml(e,true)}<div class="who"><h2>${esc(e.first_name)} ${esc(e.last_name)}</h2><div class="muted">${esc(e.job_title)} · ${esc(e.department)} · ${esc(e.site)}</div><div class="small muted">${esc(e.employee_number)} · Started ${fmtDate(e.start_date)}${e.manager_id?` · Manager: ${esc(empName(e.manager_id))}`:''}</div></div></div></div>
+    <div class="card"><div class="card-head"><h3>My details</h3><button class="btn btn-outline btn-sm" onclick="myDetailsForm()">Update contact details</button></div>
+      <dl class="kv">
+        <dt>Date of birth</dt><dd>${fmtDate(e.date_of_birth)}</dd>
+        <dt>NI number</dt><dd>${esc(e.ni_number)||'—'}</dd>
+        <dt>Address</dt><dd>${[e.address_line1,e.address_line2,e.city,e.postcode].filter(Boolean).map(esc).join(', ')||'—'}</dd>
+        <dt>Mobile</dt><dd>${esc(e.mobile_phone)||'—'}</dd>
+        <dt>Personal email</dt><dd>${esc(e.personal_email)||'—'}</dd>
+        <dt>Work email</dt><dd>${esc(e.work_email)||'—'}</dd>
+        <dt>Salary</dt><dd>${fmtMoney(e.salary)} (${esc(e.pay_frequency)})</dd>
+      </dl>
+    </div>
+    <div class="card"><div class="card-head"><h3>Emergency contacts</h3><button class="btn btn-accent btn-sm" onclick="myContactForm()">+ Add contact</button></div>
+      ${contacts.length?contacts.map(ct=>`<div class="doc-row"><div class="dic">☎</div><div class="di"><div class="t">${esc(ct.name)} <span class="small muted">(${esc(ct.relationship)})</span></div><div class="small muted">${esc(ct.phone)}${ct.email?` · ${esc(ct.email)}`:''}</div></div><button class="btn btn-danger btn-sm" onclick="deleteMyContact('${ct.id}')">×</button></div>`).join(''):'<div class="empty small">No emergency contacts. Please add one.</div>'}
+    </div>
+    <div class="card"><button class="btn btn-outline" onclick="changeMyPassword()">Change my password</button></div>`;
+}
+function myDetailsForm(){
+  const e = empById(state.user.employee_id);
+  openModal(`<h2>Update my contact details</h2>
+    <form onsubmit="saveMyDetails(event)">
+      <div class="form-group"><label>Address line 1</label><input id="md-a1" value="${esc(e.address_line1||'')}"></div>
+      <div class="form-row-3">
+        <div class="form-group"><label>Address line 2</label><input id="md-a2" value="${esc(e.address_line2||'')}"></div>
+        <div class="form-group"><label>Town/City</label><input id="md-city" value="${esc(e.city||'')}"></div>
+        <div class="form-group"><label>Postcode</label><input id="md-pc" value="${esc(e.postcode||'')}"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Mobile</label><input id="md-mob" value="${esc(e.mobile_phone||'')}"></div>
+        <div class="form-group"><label>Personal email</label><input id="md-pe" type="email" value="${esc(e.personal_email||'')}"></div>
+      </div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
+    </form>`);
+}
+async function saveMyDetails(ev){
+  ev.preventDefault();
+  const e = empById(state.user.employee_id);
+  e.address_line1=val('md-a1'); e.address_line2=val('md-a2'); e.city=val('md-city'); e.postcode=val('md-pc'); e.mobile_phone=val('md-mob'); e.personal_email=val('md-pe'); e.updated_at=nowISO();
+  await idbPut('employees', e); await refreshCaches();
+  closeModal(); toast('Details updated'); navigate('my-profile');
+}
+function myContactForm(){
+  openModal(`<h2>Add emergency contact</h2>
+    <form onsubmit="saveMyContact(event)">
+      <div class="form-group"><label class="req">Name</label><input id="mc-name" required></div>
+      <div class="form-row"><div class="form-group"><label>Relationship</label><input id="mc-rel"></div><div class="form-group"><label class="req">Phone</label><input id="mc-phone" required></div></div>
+      <div class="form-group"><label>Email</label><input id="mc-email" type="email"></div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
+    </form>`);
+}
+async function saveMyContact(ev){
+  ev.preventDefault();
+  await idbPut('contacts', { id:uuid(), employee_id:state.user.employee_id, name:val('mc-name'), relationship:val('mc-rel'), phone:val('mc-phone'), email:val('mc-email') });
+  closeModal(); toast('Contact added'); navigate('my-profile');
+}
+async function deleteMyContact(id){ if(!confirm('Delete this contact?'))return; await idbDelete('contacts',id); toast('Deleted'); navigate('my-profile'); }
+
+async function renderMyLeave(c){
+  const id = state.user.employee_id;
+  if (!id){ c.innerHTML='<div class="empty">No employee record linked to your account.</div>'; return; }
+  const bal = await leaveBalance(id);
+  const rows = (await idbByIndex('leave','employee_id',id)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
+  setTopbar(`<button class="btn btn-accent" onclick="leaveForm(null,true)">+ Book holiday</button>`);
+  c.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat"><div class="num">${bal.allowance}</div><div class="lbl">Allowance (${bal.bounds.label})</div></div>
+      <div class="stat info"><div class="num">${bal.taken}</div><div class="lbl">Taken</div></div>
+      <div class="stat warn"><div class="num">${bal.pending}</div><div class="lbl">Pending approval</div></div>
+      <div class="stat ok"><div class="num">${bal.remaining}</div><div class="lbl">Remaining</div></div>
+    </div>
+    <div class="card"><div class="card-head"><h3>My leave & absence</h3><button class="btn btn-accent btn-sm" onclick="leaveForm(null,true)">+ Book holiday</button></div>
+      ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th><th></th></tr></thead><tbody>${
+        rows.map(l=>`<tr><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td><td style="text-align:right">${l.status==='pending'?`<button class="btn btn-outline btn-sm" onclick="cancelMyLeave('${l.id}')">Cancel</button>`:''}</td></tr>`).join('')
+      }</tbody></table></div>`:'<div class="empty small">No leave booked yet.</div>'}
+    </div>`;
+}
+async function cancelMyLeave(id){ if(!confirm('Cancel this request?'))return; const l=(await idbGetAll('leave')).find(x=>x.id===id); l.status='cancelled'; await idbPut('leave',l); toast('Request cancelled'); navigate('my-leave'); }
+
+async function renderMyPerformance(c){
+  const id = state.user.employee_id;
+  if (!id){ c.innerHTML='<div class="empty">No employee record linked to your account.</div>'; return; }
+  const reviews = (await idbByIndex('reviews','employee_id',id)).sort((a,b)=>(b.scheduled_date||'').localeCompare(a.scheduled_date||''));
+  const objectives = await idbByIndex('objectives','employee_id',id);
+  c.innerHTML = `
+    <div class="card"><div class="card-head"><h3>My reviews & appraisals</h3></div>
+      ${reviews.length?`<div class="table-wrap"><table><thead><tr><th>Type</th><th>Period</th><th>Date</th><th>Rating</th><th>Status</th><th></th></tr></thead><tbody>${
+        reviews.map(r=>`<tr><td>${r.type==='annual'?'Annual appraisal':'Mid-year review'}</td><td>${esc(r.period)}</td><td>${fmtDate(r.scheduled_date)}</td><td>${esc(r.overall_rating)||'—'}</td><td>${reviewStatusBadge(r.status)}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="reviewForm('${id}','${r.id}')">${r.status==='completed'?'View':'Add self-assessment'}</button></td></tr>`).join('')
+      }</tbody></table></div>`:'<div class="empty small">No reviews scheduled yet.</div>'}
+    </div>
+    <div class="card"><div class="card-head"><h3>My objectives</h3></div>
+      ${objectives.length?objectives.map(o=>`<div class="doc-row"><div class="di"><div class="t">${esc(o.title)} ${objStatusBadge(o.status)}</div><div class="small muted">${esc(o.description)||''}</div><div class="small muted">Target ${fmtDate(o.target_date)}</div><div class="progress" style="margin-top:6px"><div style="width:${o.progress}%"></div></div></div></div>`).join(''):'<div class="empty small">No objectives set yet.</div>'}
+    </div>`;
+}
+
+function changeMyPassword(){
+  openModal(`<h2>Change my password</h2>
+    <form onsubmit="saveMyPassword(event)">
+      <div class="form-group"><label class="req">Current password</label><input id="pw-cur" type="password" required></div>
+      <div class="form-group"><label class="req">New password</label><input id="pw-new" type="password" required minlength="6"></div>
+      <div class="form-group"><label class="req">Confirm new password</label><input id="pw-conf" type="password" required></div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Change password</button></div>
+    </form>`);
+}
+async function saveMyPassword(ev){
+  ev.preventDefault();
+  const cur = await sha256(val('pw-cur'));
+  if (cur !== state.user.password_hash){ toast('Current password incorrect','error'); return; }
+  if (val('pw-new') !== val('pw-conf')){ toast('New passwords do not match','error'); return; }
+  state.user.password_hash = await sha256(val('pw-new')); state.user.must_change_password=false;
+  await idbPut('users', state.user);
+  closeModal(); toast('Password changed');
+}
+
+// ═══════════════════════════════════════════════
+// BOOT
+// ═══════════════════════════════════════════════
+(async function init(){
+  await openDB();
+  await seedDefaults();
+  const sid = sessionStorage.getItem('hr_session');
+  if (sid){ const u = await idbGet('users', sid); if (u){ state.user = u; await enterApp(); return; } }
+})();
+</script>
+</body>
+</html>
