@@ -500,10 +500,11 @@ const NAV = {
     { id:'leave-holiday', label:'Team Holiday',     ic:'✈', badge:'pendingHoliday' },
     { id:'leave-sickness',label:'Team Sickness',    ic:'＋', badge:'pendingSickness' },
     { id:'leave-other',   label:'Team Absences',    ic:'⋯', badge:'pendingOther' },
+    { id:'performance',   label:'Team Performance', ic:'★' },
     { id:'my-leave',      label:'My Holiday',       ic:'✈' },
     { id:'my-sickness',   label:'My Sickness',      ic:'＋' },
     { id:'my-other',      label:'My Other Absences',ic:'⋯' },
-    { id:'performance',   label:'Performance',      ic:'★' },
+    { id:'my-performance',label:'My Performance',   ic:'★' },
     { id:'documents',     label:'Documents',        ic:'▤' },
     { id:'tasks',         label:'My Tasks',         ic:'✔', badge:'openTasks' }
   ],
@@ -561,7 +562,7 @@ async function navigate(page){
   document.getElementById('sidebar').classList.remove('open');
   await refreshCaches();
   const mgr = state.user.role==='manager';
-  const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', 'leave-holiday':mgr?'Team Holiday':'Holiday', 'leave-sickness':mgr?'Team Sickness':'Sickness', 'leave-other':mgr?'Team Absences':'Other Absences', performance:'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: mgr?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-sickness':'My Sickness', 'my-other':'My Other Absences', 'my-performance':'My Performance' };
+  const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', 'leave-holiday':mgr?'Team Holiday':'Holiday', 'leave-sickness':mgr?'Team Sickness':'Sickness', 'leave-other':mgr?'Team Absences':'Other Absences', performance:mgr?'Team Performance':'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: mgr?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-sickness':'My Sickness', 'my-other':'My Other Absences', 'my-performance':'My Performance' };
   document.getElementById('page-title').textContent = titles[page] || page;
   const c = document.getElementById('content');
   c.innerHTML = '<div class="empty">Loading…</div>';
