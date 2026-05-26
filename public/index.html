@@ -1125,7 +1125,7 @@ async function renderLeave(c, category){
     other:    { recTitle:'Other absence records',  recBtn:'+ Record absence',  preset:'unpaid' }
   }[category];
   const showType = category==='other';
-  if (state.user.role==='hr_admin') setTopbar(`<button class="btn btn-accent" onclick="leaveForm(null,false,'${meta.preset}')">${meta.recBtn}</button>`);
+  if (state.user.role==='hr_admin' || isMgr) setTopbar(`<button class="btn btn-accent" onclick="leaveForm(null,false,'${meta.preset}')">${meta.recBtn}</button>`);
   const typeCol = showType ? '<th>Type</th>' : '';
   const typeCell = l => showType ? `<td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td>` : '';
   c.innerHTML = `
@@ -1159,8 +1159,10 @@ async function decideLeave(id, decision){
 async function deleteLeave(id){ if(!confirm('Delete this leave record?'))return; await idbDelete('leave',id); toast('Deleted'); refreshLeaveViews(); }
 
 async function leaveForm(presetEmp, asEmployee, presetType){
-  const empOptions = state.employees.filter(e=>e.status!=='leaver');
   const isSelf = asEmployee === true;
+  let empOptions = state.employees.filter(e=>e.status!=='leaver');
+  // Managers may only record for their own direct reports
+  if (!isSelf && state.user.role==='manager'){ const team=teamMemberIds(); empOptions = empOptions.filter(e=>team.includes(e.id)); }
   const defType = presetType || 'holiday';
   const typeEntries = Object.entries(LEAVE_TYPES).filter(([k])=> k!=='adjustment' && (isSelf ? k==='holiday' : true));
   openModal(`<h2>${isSelf?'Book holiday':'Record '+(LEAVE_TYPES[defType]?LEAVE_TYPES[defType].label.toLowerCase():'leave')}</h2>
