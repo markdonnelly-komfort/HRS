@@ -482,29 +482,35 @@ async function refreshCaches(){
 // ═══════════════════════════════════════════════
 const NAV = {
   hr_admin: [
-    { id:'dashboard',   label:'Dashboard',        ic:'▦' },
-    { id:'employees',   label:'Employees',        ic:'☺' },
-    { id:'leave',       label:'Holiday & Absence',ic:'✈', badge:'pendingLeave' },
-    { id:'performance', label:'Performance',      ic:'★' },
-    { id:'documents',   label:'Documents',        ic:'▤' },
-    { id:'reports',     label:'Reports',          ic:'▣' },
-    { id:'tasks',       label:'HR Tasks',         ic:'✔', badge:'openTasks' },
-    { id:'users',       label:'User Accounts',    ic:'⚷' },
-    { id:'settings',    label:'Settings',         ic:'⚙' }
+    { id:'dashboard',     label:'Dashboard',        ic:'▦' },
+    { id:'employees',     label:'Employees',        ic:'☺' },
+    { id:'leave-holiday', label:'Holiday',          ic:'✈', badge:'pendingHoliday' },
+    { id:'leave-sickness',label:'Sickness',         ic:'＋', badge:'pendingSickness' },
+    { id:'leave-other',   label:'Other Absences',   ic:'⋯', badge:'pendingOther' },
+    { id:'performance',   label:'Performance',      ic:'★' },
+    { id:'documents',     label:'Documents',        ic:'▤' },
+    { id:'reports',       label:'Reports',          ic:'▣' },
+    { id:'tasks',         label:'HR Tasks',         ic:'✔', badge:'openTasks' },
+    { id:'users',         label:'User Accounts',    ic:'⚷' },
+    { id:'settings',      label:'Settings',         ic:'⚙' }
   ],
   manager: [
-    { id:'dashboard',   label:'Dashboard',        ic:'▦' },
-    { id:'team',        label:'My Team',          ic:'☺' },
-    { id:'leave',       label:'Approvals',        ic:'✈', badge:'pendingLeave' },
-    { id:'performance', label:'Performance',      ic:'★' },
-    { id:'documents',   label:'Documents',        ic:'▤' },
-    { id:'tasks',       label:'My Tasks',         ic:'✔', badge:'openTasks' }
+    { id:'dashboard',     label:'Dashboard',        ic:'▦' },
+    { id:'team',          label:'My Team',          ic:'☺' },
+    { id:'leave-holiday', label:'Holiday',          ic:'✈', badge:'pendingHoliday' },
+    { id:'leave-sickness',label:'Sickness',         ic:'＋', badge:'pendingSickness' },
+    { id:'leave-other',   label:'Other Absences',   ic:'⋯', badge:'pendingOther' },
+    { id:'performance',   label:'Performance',      ic:'★' },
+    { id:'documents',     label:'Documents',        ic:'▤' },
+    { id:'tasks',         label:'My Tasks',         ic:'✔', badge:'openTasks' }
   ],
   employee: [
-    { id:'my-profile',  label:'My Profile',       ic:'☺' },
-    { id:'my-leave',    label:'My Holiday',       ic:'✈' },
-    { id:'my-performance', label:'My Performance', ic:'★' },
-    { id:'documents',   label:'Company Documents',ic:'▤' }
+    { id:'my-profile',    label:'My Profile',       ic:'☺' },
+    { id:'my-leave',      label:'My Holiday',       ic:'✈' },
+    { id:'my-sickness',   label:'My Sickness',      ic:'＋' },
+    { id:'my-other',      label:'My Other Absences',ic:'⋯' },
+    { id:'my-performance',label:'My Performance',   ic:'★' },
+    { id:'documents',     label:'Company Documents',ic:'▤' }
   ]
 };
 
@@ -522,14 +528,19 @@ async function buildNav(){
 async function computeBadges(){
   const leave = await idbGetAll('leave');
   const tasks = await idbGetAll('tasks');
-  let pendingLeave = leave.filter(l => l.status === 'pending');
+  let pending = leave.filter(l => l.status === 'pending');
   if (state.user.role === 'manager'){
     const team = teamMemberIds();
-    pendingLeave = pendingLeave.filter(l => team.includes(l.employee_id));
+    pending = pending.filter(l => team.includes(l.employee_id));
   }
   let openTasks = tasks.filter(t => t.status !== 'done');
   if (state.user.role === 'manager') openTasks = openTasks.filter(t => t.assigned_to === state.user.id);
-  return { pendingLeave: pendingLeave.length, openTasks: openTasks.length };
+  return {
+    pendingHoliday: pending.filter(l=>l.type==='holiday').length,
+    pendingSickness: pending.filter(l=>l.type==='sickness').length,
+    pendingOther: pending.filter(l=>OTHER_ABSENCE.includes(l.type)).length,
+    openTasks: openTasks.length
+  };
 }
 
 function teamMemberIds(){
@@ -546,7 +557,7 @@ async function navigate(page){
   document.getElementById('topbar-actions').innerHTML = '';
   document.getElementById('sidebar').classList.remove('open');
   await refreshCaches();
-  const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', leave: state.user.role==='manager'?'Leave Approvals':'Holiday & Absence', performance:'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: state.user.role==='manager'?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-performance':'My Performance' };
+  const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', 'leave-holiday':'Holiday', 'leave-sickness':'Sickness', 'leave-other':'Other Absences', performance:'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: state.user.role==='manager'?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-sickness':'My Sickness', 'my-other':'My Other Absences', 'my-performance':'My Performance' };
   document.getElementById('page-title').textContent = titles[page] || page;
   const c = document.getElementById('content');
   c.innerHTML = '<div class="empty">Loading…</div>';
@@ -555,7 +566,9 @@ async function navigate(page){
       case 'dashboard': await renderDashboard(c); break;
       case 'employees': await renderEmployees(c, false); break;
       case 'team': await renderEmployees(c, true); break;
-      case 'leave': await renderLeave(c); break;
+      case 'leave-holiday': await renderLeave(c, 'holiday'); break;
+      case 'leave-sickness': await renderLeave(c, 'sickness'); break;
+      case 'leave-other': await renderLeave(c, 'other'); break;
       case 'performance': await renderPerformance(c); break;
       case 'documents': await renderDocuments(c); break;
       case 'reports': await renderReports(c); break;
@@ -564,6 +577,8 @@ async function navigate(page){
       case 'settings': await renderSettings(c); break;
       case 'my-profile': await renderMyProfile(c); break;
       case 'my-leave': await renderMyLeave(c); break;
+      case 'my-sickness': await renderMySickness(c); break;
+      case 'my-other': await renderMyOther(c); break;
       case 'my-performance': await renderMyPerformance(c); break;
       default: c.innerHTML = '<div class="empty">Page not found</div>';
     }
@@ -716,7 +731,7 @@ async function renderDashboard(c){
     </div>`:''}
 
     <div class="card">
-      <div class="card-head"><h3>Pending leave approvals</h3>${pending.length?`<button class="btn btn-primary btn-sm" onclick="navigate('leave')">Review all</button>`:''}</div>
+      <div class="card-head"><h3>Pending leave approvals</h3>${pending.length?`<button class="btn btn-primary btn-sm" onclick="navigate('leave-holiday')">Review all</button>`:''}</div>
       ${pending.length ? `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Days</th><th></th></tr></thead><tbody>${
         pending.slice(0,6).map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)} – ${fmtDate(l.end_date)}</td><td>${l.days}</td><td style="text-align:right"><button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')">Approve</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button></td></tr>`).join('')
       }</tbody></table></div>` : `<div class="empty"><span class="ic">✓</span>No leave waiting for approval.</div>`}
@@ -912,7 +927,7 @@ async function empTabOther(body, id){
   const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id));
   body.innerHTML = `
     <div class="card"><div class="card-head"><h3>Other absence</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="leaveForm('${id}',false,'unpaid')">+ Record absence</button>`:''}</div>
-      <p class="small muted" style="margin-bottom:10px">Unpaid leave, maternity/paternity and other. (Holiday and sickness have their own tabs.)</p>
+      <p class="small muted" style="margin-bottom:10px">Unpaid leave, maternity/paternity and other.</p>
       ${other.length?`<div class="table-wrap"><table><thead><tr><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
         other.map(l=>`<tr><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td>${canManage?`<td style="text-align:right;white-space:nowrap">${l.status==='pending'?`<button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')">Book</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button>`:`<button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button>`}</td>`:''}</tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">No other absence recorded.</div>'}
@@ -1091,26 +1106,36 @@ async function deleteContact(id, empId){ if(!confirm('Delete this contact?'))ret
 // ═══════════════════════════════════════════════
 // LEAVE / ABSENCE
 // ═══════════════════════════════════════════════
-async function renderLeave(c){
+async function renderLeave(c, category){
+  category = category || 'holiday';
   const isMgr = state.user.role==='manager';
   const scope = isMgr ? teamMemberIds() : null;
-  let leave = await idbGetAll('leave');
+  const inCat = l => category==='other' ? OTHER_ABSENCE.includes(l.type) : l.type===category;
+  let leave = (await idbGetAll('leave')).filter(inCat);
   if (scope) leave = leave.filter(l => scope.includes(l.employee_id));
   const pending = leave.filter(l=>l.status==='pending').sort((a,b)=>a.start_date.localeCompare(b.start_date));
-  const upcoming = leave.filter(l=>l.type!=='adjustment' && l.status==='approved' && l.end_date>=today()).sort((a,b)=>a.start_date.localeCompare(b.start_date));
-  if (state.user.role==='hr_admin') setTopbar(`<button class="btn btn-accent" onclick="leaveForm()">+ Record leave</button>`);
+  const records = leave.filter(l=>l.status!=='pending').sort((a,b)=>b.start_date.localeCompare(a.start_date));
+  const meta = {
+    holiday:  { recTitle:'Holiday bookings',       recBtn:'+ Record holiday',  preset:'holiday' },
+    sickness: { recTitle:'Sickness records',       recBtn:'+ Record sickness', preset:'sickness' },
+    other:    { recTitle:'Other absence records',  recBtn:'+ Record absence',  preset:'unpaid' }
+  }[category];
+  const showType = category==='other';
+  if (state.user.role==='hr_admin') setTopbar(`<button class="btn btn-accent" onclick="leaveForm(null,false,'${meta.preset}')">${meta.recBtn}</button>`);
+  const typeCol = showType ? '<th>Type</th>' : '';
+  const typeCell = l => showType ? `<td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td>` : '';
   c.innerHTML = `
     <div class="card">
       <div class="card-head"><h3>Awaiting approval (${pending.length})</h3></div>
-      ${pending.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Reason</th><th></th></tr></thead><tbody>${
-        pending.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td><td style="text-align:right"><button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')">Approve</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button></td></tr>`).join('')
+      ${pending.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th>${typeCol}<th>From</th><th>To</th><th>Days</th><th>Reason</th><th></th></tr></thead><tbody>${
+        pending.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td>${typeCell(l)}<td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td><td style="text-align:right;white-space:nowrap"><button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')">Approve</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button></td></tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">Nothing awaiting approval.</div>'}
     </div>
     <div class="card">
-      <div class="card-head"><h3>Upcoming approved leave</h3></div>
-      ${upcoming.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Days</th></tr></thead><tbody>${
-        upcoming.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td></tr>`).join('')
-      }</tbody></table></div>`:'<div class="empty small">No upcoming leave.</div>'}
+      <div class="card-head"><h3>${meta.recTitle}</h3></div>
+      ${records.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th>${typeCol}<th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th></tr></thead><tbody>${
+        records.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td>${typeCell(l)}<td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td></tr>`).join('')
+      }</tbody></table></div>`:'<div class="empty small">No records.</div>'}
     </div>`;
 }
 // Refresh the in-detail tab if open, otherwise re-render the current page.
@@ -1682,8 +1707,6 @@ async function renderMyLeave(c){
   const bal = await leaveBalance(id);
   const all = (await idbByIndex('leave','employee_id',id)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
   const holidays = all.filter(l=>l.type==='holiday');
-  const sickness = all.filter(l=>l.type==='sickness');
-  const other = all.filter(l=>OTHER_ABSENCE.includes(l.type));
   const adjustments = all.filter(l=>l.type==='adjustment');
   setTopbar(`<button class="btn btn-accent" onclick="leaveForm(null,true)">+ Book holiday</button>`);
   c.innerHTML = balanceTiles(bal) + `
@@ -1694,13 +1717,37 @@ async function renderMyLeave(c){
     </div>
     ${adjustments.length?`<div class="card"><div class="card-head"><h3>Holiday adjustments</h3></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Change</th><th>Note</th></tr></thead><tbody>${
       adjustments.map(a=>`<tr><td>${fmtDate(a.start_date)}</td><td><strong>${a.days>=0?'+':''}${a.days} day${Math.abs(a.days)!==1?'s':''}</strong></td><td class="small">${esc(a.reason)||'—'}</td></tr>`).join('')
-    }</tbody></table></div></div>`:''}
-    ${sickness.length?`<div class="card"><div class="card-head"><h3>My sickness</h3></div><div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Reason</th></tr></thead><tbody>${
-      sickness.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td></tr>`).join('')
-    }</tbody></table></div></div>`:''}
-    ${other.length?`<div class="card"><div class="card-head"><h3>Other absence</h3></div><div class="table-wrap"><table><thead><tr><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th></tr></thead><tbody>${
-      other.map(l=>`<tr><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td></tr>`).join('')
     }</tbody></table></div></div>`:''}`;
+}
+async function renderMySickness(c){
+  const id = state.user.employee_id;
+  if (!id){ c.innerHTML='<div class="empty">No employee record linked to your account.</div>'; return; }
+  const bounds = await holidayYearBounds();
+  const sickness = (await idbByIndex('leave','employee_id',id)).filter(l=>l.type==='sickness').sort((a,b)=>b.start_date.localeCompare(a.start_date));
+  const thisYr = sickness.filter(l=>l.start_date>=bounds.start && l.start_date<=bounds.end);
+  const totalDays = thisYr.reduce((a,l)=>a+l.days,0);
+  c.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat ${totalDays>0?'warn':'ok'}"><div class="num">${totalDays}</div><div class="lbl">Sick days (${bounds.label})</div></div>
+      <div class="stat"><div class="num">${thisYr.length}</div><div class="lbl">Episodes (${bounds.label})</div></div>
+    </div>
+    <div class="card"><div class="card-head"><h3>My sickness</h3></div>
+      ${sickness.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Reason / notes</th></tr></thead><tbody>${
+        sickness.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td></tr>`).join('')
+      }</tbody></table></div>`:'<div class="empty small">No sickness recorded. Sickness is logged by HR or your manager.</div>'}
+    </div>`;
+}
+async function renderMyOther(c){
+  const id = state.user.employee_id;
+  if (!id){ c.innerHTML='<div class="empty">No employee record linked to your account.</div>'; return; }
+  const other = (await idbByIndex('leave','employee_id',id)).filter(l=>OTHER_ABSENCE.includes(l.type)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
+  c.innerHTML = `
+    <div class="card"><div class="card-head"><h3>My other absences</h3></div>
+      <p class="small muted" style="margin-bottom:10px">Unpaid leave, maternity/paternity and other. Recorded by HR or your manager.</p>
+      ${other.length?`<div class="table-wrap"><table><thead><tr><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th></tr></thead><tbody>${
+        other.map(l=>`<tr><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td></tr>`).join('')
+      }</tbody></table></div>`:'<div class="empty small">No other absences recorded.</div>'}
+    </div>`;
 }
 async function cancelMyLeave(id){ if(!confirm('Cancel this request?'))return; const l=(await idbGetAll('leave')).find(x=>x.id===id); l.status='cancelled'; await idbPut('leave',l); toast('Request cancelled'); navigate('my-leave'); }
 
