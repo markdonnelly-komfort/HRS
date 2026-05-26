@@ -807,6 +807,7 @@ async function employeeDetail(id){
       <div class="tab" onclick="empTab('contacts',this)">Emergency contacts</div>
       <div class="tab" onclick="empTab('leave',this)">Holiday</div>
       <div class="tab" onclick="empTab('sickness',this)">Sickness</div>
+      <div class="tab" onclick="empTab('other',this)">Other absence</div>
       <div class="tab" onclick="empTab('performance',this)">Performance</div>
       <div class="tab" onclick="empTab('documents',this)">Documents</div>
     </div>
@@ -826,6 +827,7 @@ function empTab(tab, el){
     contacts: ()=>empTabContacts(body,id),
     leave: ()=>empTabLeave(body,id),
     sickness: ()=>empTabSickness(body,id),
+    other: ()=>empTabOther(body,id),
     performance: ()=>empTabPerformance(body,id),
     documents: ()=>empTabDocuments(body,id)
   })[tab]();
@@ -889,7 +891,6 @@ async function empTabLeave(body, id){
   const all = (await idbByIndex('leave','employee_id',id)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
   const holidays = all.filter(l=>l.type==='holiday');
   const adjustments = all.filter(l=>l.type==='adjustment');
-  const other = all.filter(l=>OTHER_ABSENCE.includes(l.type));
   const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id));
   const act = l => canManage ? `<td style="text-align:right;white-space:nowrap">${l.status==='pending'?`<button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')" title="Approve / book">Book</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button>`:`<button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button>`}</td>` : '';
   const leaveTable = (list,empty) => list.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
@@ -904,11 +905,16 @@ async function empTabLeave(body, id){
       ${adjustments.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Change</th><th>Note</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
         adjustments.map(a=>`<tr><td>${fmtDate(a.start_date)}</td><td><strong>${a.days>=0?'+':''}${a.days} day${Math.abs(a.days)!==1?'s':''}</strong></td><td class="small">${esc(a.reason)||'—'}</td>${canManage?`<td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="deleteLeave('${a.id}')">Delete</button></td>`:''}</tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">No adjustments recorded.</div>'}
-    </div>
+    </div>`;
+}
+async function empTabOther(body, id){
+  const other = (await idbByIndex('leave','employee_id',id)).filter(l=>OTHER_ABSENCE.includes(l.type)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
+  const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id));
+  body.innerHTML = `
     <div class="card"><div class="card-head"><h3>Other absence</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="leaveForm('${id}',false,'unpaid')">+ Record absence</button>`:''}</div>
-      <p class="small muted" style="margin-bottom:10px">Unpaid leave, maternity/paternity and other. (Sickness has its own tab.)</p>
+      <p class="small muted" style="margin-bottom:10px">Unpaid leave, maternity/paternity and other. (Holiday and sickness have their own tabs.)</p>
       ${other.length?`<div class="table-wrap"><table><thead><tr><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
-        other.map(l=>`<tr><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td>${act(l)}</tr>`).join('')
+        other.map(l=>`<tr><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td>${canManage?`<td style="text-align:right;white-space:nowrap">${l.status==='pending'?`<button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')">Book</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button>`:`<button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button>`}</td>`:''}</tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">No other absence recorded.</div>'}
     </div>`;
 }
