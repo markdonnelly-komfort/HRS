@@ -49,6 +49,7 @@ function initializeSchema() {
   db.run(`
     CREATE TABLE IF NOT EXISTS employees (
       id TEXT PRIMARY KEY,
+      title TEXT,
       employee_number TEXT,
       first_name TEXT NOT NULL,
       last_name TEXT NOT NULL,
@@ -69,8 +70,11 @@ function initializeSchema() {
       site TEXT,
       manager_id TEXT REFERENCES employees(id),
       employment_type TEXT,
+      working_hours REAL,
+      notice_period TEXT,
       start_date TEXT,
       end_date TEXT,
+      probation_end_date TEXT,
       status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','on_leave','leaver')),
       salary REAL,
       pay_frequency TEXT,
@@ -102,7 +106,8 @@ function initializeSchema() {
       name TEXT NOT NULL,
       relationship TEXT,
       phone TEXT,
-      email TEXT
+      email TEXT,
+      address TEXT
     )
   `);
   db.run(`
@@ -123,7 +128,7 @@ function initializeSchema() {
     CREATE TABLE IF NOT EXISTS leave (
       id TEXT PRIMARY KEY,
       employee_id TEXT NOT NULL REFERENCES employees(id),
-      type TEXT NOT NULL CHECK(type IN ('holiday','sickness','unpaid','maternity','other')),
+      type TEXT NOT NULL CHECK(type IN ('holiday','sickness','unpaid','maternity','other','adjustment')),
       start_date TEXT NOT NULL,
       end_date TEXT NOT NULL,
       days REAL NOT NULL,

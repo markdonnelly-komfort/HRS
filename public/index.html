@@ -335,13 +335,25 @@ async function logAction(action, details={}){ try{ await idbAdd('audit_log', { t
 const SITES = ['Leeds','Axcess-10','Crawley'];
 const DEPARTMENTS = ['Operations','Manufacturing','Sales','Finance','HR','Design','Installation','Logistics','Management'];
 const LEAVE_TYPES = {
-  holiday:   { label:'Holiday',          deducts:true,  colour:'b-blue'  },
-  sickness:  { label:'Sickness',         deducts:false, colour:'b-red'   },
-  unpaid:    { label:'Unpaid leave',     deducts:false, colour:'b-grey'  },
-  maternity: { label:'Maternity/Paternity', deducts:false, colour:'b-amber' },
-  other:     { label:'Other',            deducts:false, colour:'b-grey'  }
+  holiday:    { label:'Holiday',          deducts:true,  colour:'b-blue'  },
+  sickness:   { label:'Sickness',         deducts:false, colour:'b-red'   },
+  unpaid:     { label:'Unpaid leave',     deducts:false, colour:'b-grey'  },
+  maternity:  { label:'Maternity/Paternity', deducts:false, colour:'b-amber' },
+  other:      { label:'Other',            deducts:false, colour:'b-grey'  },
+  adjustment: { label:'Adjustment',       deducts:false, colour:'b-yellow' }
 };
+// Absence types that appear in the "other absence" area (not holiday, sickness or adjustment)
+const OTHER_ABSENCE = ['unpaid','maternity','other'];
+const EMPLOYMENT_TYPES = ['Permanent','Contract','Casual'];
+const TITLES = ['Mr','Mrs','Ms','Miss','Mx','Dr','Prof'];
 const DEFAULT_ALLOWANCE = 25;
+
+// Build <option>s, preserving an existing value even if it's not in the list.
+function optionList(options, current){
+  const opts = options.slice();
+  if (current && !opts.includes(current)) opts.unshift(current);
+  return opts.map(o=>`<option ${current===o?'selected':''}>${esc(o)}</option>`).join('');
+}
 
 async function getSetting(key, fallback){ const r = await idbGet('settings', key); return r ? r.value : fallback; }
 async function setSetting(key, value){ return idbPut('settings', { key, value }); }
@@ -359,23 +371,24 @@ async function seedDefaults(){
   // Sample employees
   const mgrId = uuid(), empId = uuid(), e3 = uuid(), e4 = uuid(), e5 = uuid();
   const mk = (id, o) => ({
-    id, employee_number:o.num, first_name:o.fn, last_name:o.ln, preferred_name:'',
+    id, title:o.ttl||'', employee_number:o.num, first_name:o.fn, last_name:o.ln, preferred_name:'',
     date_of_birth:o.dob, gender:o.g||'', ni_number:o.ni,
     address_line1:o.a1||'', address_line2:'', city:o.city||'', postcode:o.pc||'',
     personal_email:o.pe||'', work_email:o.we, mobile_phone:o.mob||'', home_phone:'',
     job_title:o.jt, department:o.dept, site:o.site, manager_id:o.mgr||null,
-    employment_type:o.type||'Full-time', start_date:o.start, end_date:o.end||null,
+    employment_type:o.type||'Permanent', working_hours:o.hours??37.5, notice_period:o.notice||'1 month',
+    start_date:o.start, end_date:o.end||null, probation_end_date:o.prob||null,
     status:o.status||'active', salary:o.sal, pay_frequency:'Annual',
     bank_sort_code:'', bank_account:'',
     holiday_allowance:o.hol||DEFAULT_ALLOWANCE,
     photo:null, notes:'', created_at:nowISO(), updated_at:nowISO()
   });
   const emps = [
-    mk(mgrId,{num:'KP-001',fn:'Sarah',ln:'Mitchell',dob:'1980-04-12',g:'Female',ni:'AB123456C',a1:'14 Mill Lane',city:'Leeds',pc:'LS10 1AB',we:'s.mitchell@komfort.com',pe:'sarah.m@gmail.com',mob:'07700 900111',jt:'Operations Manager',dept:'Management',site:'Leeds',type:'Full-time',start:'2015-03-01',sal:62000,hol:28}),
-    mk(empId,{num:'KP-014',fn:'James',ln:'Okafor',dob:'1992-09-23',g:'Male',ni:'CD654321B',a1:'5 Beech Road',city:'Leeds',pc:'LS11 4QT',we:'j.okafor@komfort.com',pe:'jokafor@outlook.com',mob:'07700 900222',jt:'Production Operative',dept:'Manufacturing',site:'Leeds',mgr:mgrId,type:'Full-time',start:'2021-06-14',sal:31000,hol:25}),
-    mk(e3,{num:'KP-022',fn:'Priya',ln:'Sharma',dob:'1995-01-30',g:'Female',ni:'EF112233A',a1:'88 Oak Avenue',city:'Crawley',pc:'RH10 8GH',we:'p.sharma@komfort.com',mob:'07700 900333',jt:'Sales Executive',dept:'Sales',site:'Crawley',mgr:mgrId,type:'Full-time',start:'2023-02-20',sal:34000,hol:25}),
-    mk(e4,{num:'KP-009',fn:'David',ln:'Thompson',dob:'1975-11-05',g:'Male',ni:'GH445566D',a1:'3 Station Close',city:'Leeds',pc:'LS9 7RR',we:'d.thompson@komfort.com',mob:'07700 900444',jt:'Senior Installer',dept:'Installation',site:'Axcess-10',mgr:mgrId,type:'Full-time',start:'2018-08-13',sal:38000,hol:26}),
-    mk(e5,{num:'KP-005',fn:'Linda',ln:'Carter',dob:'1988-07-19',g:'Female',ni:'IJ778899E',a1:'21 Elmwood Drive',city:'Leeds',pc:'LS12 2AA',we:'l.carter@komfort.com',mob:'07700 900555',jt:'Finance Assistant',dept:'Finance',site:'Leeds',mgr:mgrId,type:'Part-time',start:'2019-10-01',end:'2025-12-31',status:'leaver',sal:29000,hol:20})
+    mk(mgrId,{ttl:'Mrs',num:'KP-001',fn:'Sarah',ln:'Mitchell',dob:'1980-04-12',g:'Female',ni:'AB123456C',a1:'14 Mill Lane',city:'Leeds',pc:'LS10 1AB',we:'s.mitchell@komfort.com',pe:'sarah.m@gmail.com',mob:'07700 900111',jt:'Operations Manager',dept:'Management',site:'Leeds',type:'Permanent',hours:39,notice:'3 months',start:'2015-03-01',sal:62000,hol:28}),
+    mk(empId,{ttl:'Mr',num:'KP-014',fn:'James',ln:'Okafor',dob:'1992-09-23',g:'Male',ni:'CD654321B',a1:'5 Beech Road',city:'Leeds',pc:'LS11 4QT',we:'j.okafor@komfort.com',pe:'jokafor@outlook.com',mob:'07700 900222',jt:'Production Operative',dept:'Manufacturing',site:'Leeds',mgr:mgrId,type:'Permanent',hours:39,notice:'1 month',start:'2021-06-14',sal:31000,hol:25}),
+    mk(e3,{ttl:'Ms',num:'KP-022',fn:'Priya',ln:'Sharma',dob:'1995-01-30',g:'Female',ni:'EF112233A',a1:'88 Oak Avenue',city:'Crawley',pc:'RH10 8GH',we:'p.sharma@komfort.com',mob:'07700 900333',jt:'Sales Executive',dept:'Sales',site:'Crawley',mgr:mgrId,type:'Contract',hours:37.5,notice:'1 month',start:addDays(today(),-160),prob:addDays(today(),20),sal:34000,hol:25}),
+    mk(e4,{ttl:'Mr',num:'KP-009',fn:'David',ln:'Thompson',dob:'1975-11-05',g:'Male',ni:'GH445566D',a1:'3 Station Close',city:'Leeds',pc:'LS9 7RR',we:'d.thompson@komfort.com',mob:'07700 900444',jt:'Senior Installer',dept:'Installation',site:'Axcess-10',mgr:mgrId,type:'Permanent',hours:42,notice:'1 month',start:'2018-08-13',sal:38000,hol:26}),
+    mk(e5,{ttl:'Mrs',num:'KP-005',fn:'Linda',ln:'Carter',dob:'1988-07-19',g:'Female',ni:'IJ778899E',a1:'21 Elmwood Drive',city:'Leeds',pc:'LS12 2AA',we:'l.carter@komfort.com',mob:'07700 900555',jt:'Finance Assistant',dept:'Finance',site:'Leeds',mgr:mgrId,type:'Casual',hours:22.5,notice:'1 week',start:'2019-10-01',end:'2025-12-31',status:'leaver',sal:29000,hol:20})
   ];
   for (const e of emps) await idbPut('employees', e);
 
@@ -391,6 +404,8 @@ async function seedDefaults(){
   await idbPut('leave', { id:uuid(), employee_id:empId, type:'holiday', start_date:thisYear()+'-12-22', end_date:thisYear()+'-12-23', days:2, half_day:false, status:'pending', reason:'Christmas', requested_at:nowISO(), decided_by:null, decided_at:null, decision_note:'' });
   await idbPut('leave', { id:uuid(), employee_id:empId, type:'sickness', start_date:thisYear()+'-03-10', end_date:thisYear()+'-03-11', days:2, half_day:false, status:'approved', reason:'Flu', requested_at:nowISO(), decided_by:'admin', decided_at:nowISO(), decision_note:'Self-certified' });
   await idbPut('leave', { id:uuid(), employee_id:e3, type:'holiday', start_date:thisYear()+'-07-01', end_date:thisYear()+'-07-04', days:4, half_day:false, status:'approved', reason:'', requested_at:nowISO(), decided_by:'manager', decided_at:nowISO(), decision_note:'' });
+  // Sample holiday adjustment (e.g. worked an extra day, +1 to entitlement)
+  await idbPut('leave', { id:uuid(), employee_id:empId, type:'adjustment', start_date:thisYear()+'-04-18', end_date:thisYear()+'-04-18', days:1, half_day:false, status:'approved', reason:'Worked bank holiday Friday – +1 day in lieu', requested_at:nowISO(), decided_by:'admin', decided_at:nowISO(), decision_note:'' });
 
   // Sample objectives
   await idbPut('objectives', { id:uuid(), employee_id:empId, title:'Complete forklift certification', description:'Obtain counterbalance forklift licence to support warehouse operations.', target_date:thisYear()+'-09-30', status:'in_progress', progress:60, created_at:nowISO() });
@@ -610,14 +625,40 @@ async function leaveBalance(employeeId){
   const allowance = e?.holiday_allowance ?? DEFAULT_ALLOWANCE;
   const bounds = await holidayYearBounds();
   const rows = await idbByIndex('leave','employee_id',employeeId);
-  let taken=0, pending=0;
+  let booked=0, pending=0, adjustments=0;
   rows.forEach(l => {
-    if (l.type!=='holiday') return;
     if (l.start_date < bounds.start || l.start_date > bounds.end) return;
-    if (l.status==='approved') taken += l.days;
+    if (l.type==='adjustment'){ adjustments += Number(l.days)||0; return; }
+    if (l.type!=='holiday') return;
+    if (l.status==='approved') booked += l.days;
     else if (l.status==='pending') pending += l.days;
   });
-  return { allowance, taken, pending, remaining: allowance - taken - pending, bounds };
+  const entitlement = allowance + adjustments;
+  // Only BOOKED (approved) holiday is deducted from remaining; pending is shown
+  // separately and does NOT reduce the balance until it's approved/booked.
+  return { allowance, adjustments, entitlement, booked, taken: booked, pending, remaining: entitlement - booked, bounds };
+}
+// Reusable holiday balance tiles
+function balanceTiles(bal){
+  return `<div class="stat-grid">
+      <div class="stat"><div class="num">${bal.entitlement}</div><div class="lbl">Entitlement (${bal.bounds.label})${bal.adjustments?` · ${bal.allowance}+${bal.adjustments}`:''}</div></div>
+      <div class="stat info"><div class="num">${bal.booked}</div><div class="lbl">Booked</div></div>
+      <div class="stat warn"><div class="num">${bal.pending}</div><div class="lbl">Pending approval</div></div>
+      <div class="stat ok"><div class="num">${bal.remaining}</div><div class="lbl">Remaining</div></div>
+    </div>`;
+}
+// Length of service as "X years, Y months"
+function serviceYM(start){
+  if(!start) return '—';
+  const s=new Date(start), n=new Date();
+  if(isNaN(s)) return '—';
+  let months=(n.getFullYear()-s.getFullYear())*12+(n.getMonth()-s.getMonth());
+  if(n.getDate()<s.getDate()) months--;
+  if(months<0) months=0;
+  const y=Math.floor(months/12), m=months%12;
+  const yPart = y>0?`${y} year${y!==1?'s':''}`:'';
+  const mPart = `${m} month${m!==1?'s':''}`;
+  return (y>0? yPart+', ':'') + mPart;
 }
 
 function downloadCSV(filename, rows){
@@ -646,12 +687,16 @@ async function renderDashboard(c){
   let pending = leave.filter(l => l.status==='pending');
   if (isMgr){ const team=teamMemberIds(); pending = pending.filter(l=>team.includes(l.employee_id)); }
 
-  // currently off today
-  const offToday = leave.filter(l => l.status==='approved' && l.start_date<=today() && l.end_date>=today() && (!isMgr || teamMemberIds().includes(l.employee_id)));
+  // currently off today (exclude adjustment records — they aren't absences)
+  const offToday = leave.filter(l => l.type!=='adjustment' && l.status==='approved' && l.start_date<=today() && l.end_date>=today() && (!isMgr || teamMemberIds().includes(l.employee_id)));
   // sickness days this holiday year
   const sickDays = leave.filter(l => l.type==='sickness' && l.status==='approved' && l.start_date>=bounds.start && l.start_date<=bounds.end && (!isMgr || teamMemberIds().includes(l.employee_id))).reduce((a,l)=>a+l.days,0);
   let myTasks = tasks.filter(t => t.status!=='done');
   if (isMgr) myTasks = myTasks.filter(t=>t.assigned_to===state.user.id);
+
+  // Probation reviews coming up (next 45 days) or overdue, for active staff
+  const probDue = active.filter(e => e.probation_end_date && e.probation_end_date <= addDays(today(),45))
+    .sort((a,b)=>a.probation_end_date.localeCompare(b.probation_end_date));
 
   c.innerHTML = `
     <div class="stat-grid">
@@ -659,8 +704,16 @@ async function renderDashboard(c){
       <div class="stat info"><div class="num">${offToday.length}</div><div class="lbl">Off today</div></div>
       <div class="stat warn"><div class="num">${pending.length}</div><div class="lbl">Leave to approve</div></div>
       <div class="stat ${sickDays>0?'warn':'ok'}"><div class="num">${sickDays}</div><div class="lbl">Sick days (${bounds.label})</div></div>
+      <div class="stat ${probDue.length?'warn':''}"><div class="num">${probDue.length}</div><div class="lbl">Probation reviews due</div></div>
       <div class="stat"><div class="num">${myTasks.length}</div><div class="lbl">Open tasks</div></div>
     </div>
+
+    ${probDue.length?`<div class="card">
+      <div class="card-head"><h3>Probation reviews due</h3><span class="small muted">Next 45 days${isMgr?'':' · all sites'}</span></div>
+      <div class="table-wrap"><table><thead><tr><th>Employee</th><th>Job title</th><th>Manager</th><th>Probation ends</th><th></th></tr></thead><tbody>${
+        probDue.map(e=>{ const overdue=e.probation_end_date<today(); return `<tr class="clickable" onclick="employeeDetail('${e.id}')"><td>${esc(e.first_name+' '+e.last_name)}</td><td>${esc(e.job_title)}</td><td>${e.manager_id?esc(empName(e.manager_id)):'—'}</td><td>${fmtDate(e.probation_end_date)} ${overdue?'<span class="badge b-red">Overdue</span>':'<span class="badge b-amber">Due soon</span>'}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="event.stopPropagation();employeeDetail('${e.id}')">Open</button></td></tr>`; }).join('')
+      }</tbody></table></div>
+    </div>`:''}
 
     <div class="card">
       <div class="card-head"><h3>Pending leave approvals</h3>${pending.length?`<button class="btn btn-primary btn-sm" onclick="navigate('leave')">Review all</button>`:''}</div>
@@ -742,9 +795,9 @@ async function employeeDetail(id){
       <div class="detail-head">
         ${avatarHtml(e,true)}
         <div class="who">
-          <h2>${esc(e.first_name)} ${esc(e.last_name)} ${statusBadge(e.status)}</h2>
+          <h2>${e.title?esc(e.title)+' ':''}${esc(e.first_name)} ${esc(e.last_name)} ${statusBadge(e.status)}</h2>
           <div class="muted">${esc(e.job_title)} · ${esc(e.department)} · ${esc(e.site)}</div>
-          <div class="small muted">${esc(e.employee_number)} · Started ${fmtDate(e.start_date)}${e.manager_id?` · Reports to ${esc(empName(e.manager_id))}`:''}</div>
+          <div class="small muted">${esc(e.employee_number)} · Started ${fmtDate(e.start_date)} (${serviceYM(e.start_date)})${e.manager_id?` · Reports to ${esc(empName(e.manager_id))}`:''}</div>
         </div>
       </div>
     </div>
@@ -752,7 +805,8 @@ async function employeeDetail(id){
       <div class="tab active" onclick="empTab('personal',this)">Personal</div>
       <div class="tab" onclick="empTab('employment',this)">Employment</div>
       <div class="tab" onclick="empTab('contacts',this)">Emergency contacts</div>
-      <div class="tab" onclick="empTab('leave',this)">Holiday & absence</div>
+      <div class="tab" onclick="empTab('leave',this)">Holiday</div>
+      <div class="tab" onclick="empTab('sickness',this)">Sickness</div>
       <div class="tab" onclick="empTab('performance',this)">Performance</div>
       <div class="tab" onclick="empTab('documents',this)">Documents</div>
     </div>
@@ -761,8 +815,9 @@ async function employeeDetail(id){
   empTab('personal', document.querySelector('#emp-tabs .tab'));
 }
 function empTab(tab, el){
+  window._activeEmpTab = tab;
   document.querySelectorAll('#emp-tabs .tab').forEach(t=>t.classList.remove('active'));
-  el.classList.add('active');
+  if (el) el.classList.add('active');
   const id = window._detailEmp;
   const body = document.getElementById('emp-tab-body');
   ({
@@ -770,13 +825,22 @@ function empTab(tab, el){
     employment: ()=>empTabEmployment(body,id),
     contacts: ()=>empTabContacts(body,id),
     leave: ()=>empTabLeave(body,id),
+    sickness: ()=>empTabSickness(body,id),
     performance: ()=>empTabPerformance(body,id),
     documents: ()=>empTabDocuments(body,id)
   })[tab]();
 }
+// Re-render whichever employee-detail tab is currently active (after a save/delete).
+function refreshEmpTab(){
+  const tab = window._activeEmpTab;
+  const el = document.querySelector('#emp-tabs .tab.active');
+  if (tab && el && document.getElementById('emp-tab-body')){ empTab(tab, el); return true; }
+  return false;
+}
 function empTabPersonal(body, id){
   const e = empById(id);
   body.innerHTML = `<div class="card"><dl class="kv">
+    <dt>Title</dt><dd>${esc(e.title)||'—'}</dd>
     <dt>Full name</dt><dd>${esc(e.first_name)} ${esc(e.last_name)}</dd>
     <dt>Preferred name</dt><dd>${esc(e.preferred_name)||'—'}</dd>
     <dt>Date of birth</dt><dd>${fmtDate(e.date_of_birth)}</dd>
@@ -798,8 +862,12 @@ function empTabEmployment(body, id){
     <dt>Department</dt><dd>${esc(e.department)}</dd>
     <dt>Site</dt><dd>${esc(e.site)}</dd>
     <dt>Manager</dt><dd>${e.manager_id?esc(empName(e.manager_id)):'—'}</dd>
-    <dt>Employment type</dt><dd>${esc(e.employment_type)}</dd>
+    <dt>Employment type</dt><dd>${esc(e.employment_type)||'—'}</dd>
+    <dt>Working hours / week</dt><dd>${e.working_hours!=null&&e.working_hours!==''?esc(e.working_hours)+' hrs':'—'}</dd>
+    <dt>Notice period</dt><dd>${esc(e.notice_period)||'—'}</dd>
     <dt>Start date</dt><dd>${fmtDate(e.start_date)}</dd>
+    <dt>Length of service</dt><dd>${serviceYM(e.start_date)}</dd>
+    <dt>Probation ends</dt><dd>${e.probation_end_date?fmtDate(e.probation_end_date)+(e.probation_end_date>=today()&&e.probation_end_date<=addDays(today(),45)?' <span class="badge b-amber">Review due</span>':(e.probation_end_date<today()?' <span class="badge b-grey">Passed</span>':'')):'—'}</dd>
     <dt>End date</dt><dd>${fmtDate(e.end_date)}</dd>
     <dt>Status</dt><dd>${statusBadge(e.status)}</dd>
     ${showSalary?`<dt>Salary</dt><dd>${fmtMoney(e.salary)} (${esc(e.pay_frequency)})</dd>
@@ -813,24 +881,54 @@ async function empTabContacts(body, id){
   const contacts = await idbByIndex('contacts','employee_id',id);
   const canEdit = state.user.role==='hr_admin';
   body.innerHTML = `<div class="card"><div class="card-head"><h3>Emergency contacts</h3>${canEdit?`<button class="btn btn-accent btn-sm" onclick="contactForm('${id}')">+ Add contact</button>`:''}</div>
-    ${contacts.length?contacts.map(ct=>`<div class="doc-row"><div class="dic">☎</div><div class="di"><div class="t">${esc(ct.name)} <span class="small muted">(${esc(ct.relationship)})</span></div><div class="small muted">${esc(ct.phone)}${ct.email?` · ${esc(ct.email)}`:''}</div></div>${canEdit?`<button class="btn btn-outline btn-sm" onclick="contactForm('${id}','${ct.id}')">Edit</button> <button class="btn btn-danger btn-sm" onclick="deleteContact('${ct.id}','${id}')">×</button>`:''}</div>`).join(''):'<div class="empty small">No emergency contacts recorded.</div>'}
+    ${contacts.length?contacts.map(ct=>`<div class="doc-row"><div class="dic">☎</div><div class="di"><div class="t">${esc(ct.name)} <span class="small muted">(${esc(ct.relationship)})</span></div><div class="small muted">${esc(ct.phone)}${ct.email?` · ${esc(ct.email)}`:''}</div>${ct.address?`<div class="small muted">${esc(ct.address)}</div>`:''}</div>${canEdit?`<button class="btn btn-outline btn-sm" onclick="contactForm('${id}','${ct.id}')">Edit</button> <button class="btn btn-danger btn-sm" onclick="deleteContact('${ct.id}','${id}')">×</button>`:''}</div>`).join(''):'<div class="empty small">No emergency contacts recorded.</div>'}
   </div>`;
 }
 async function empTabLeave(body, id){
   const bal = await leaveBalance(id);
-  const rows = (await idbByIndex('leave','employee_id',id)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
+  const all = (await idbByIndex('leave','employee_id',id)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
+  const holidays = all.filter(l=>l.type==='holiday');
+  const adjustments = all.filter(l=>l.type==='adjustment');
+  const other = all.filter(l=>OTHER_ABSENCE.includes(l.type));
+  const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id));
+  const act = l => canManage ? `<td style="text-align:right;white-space:nowrap">${l.status==='pending'?`<button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')" title="Approve / book">Book</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button>`:`<button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button>`}</td>` : '';
+  const leaveTable = (list,empty) => list.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
+      list.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td>${act(l)}</tr>`).join('')
+    }</tbody></table></div>`:`<div class="empty small">${empty}</div>`;
+  body.innerHTML = balanceTiles(bal) + `
+    <div class="card"><div class="card-head"><h3>Holiday bookings</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="leaveForm('${id}',false,'holiday')">+ Add holiday</button>`:''}</div>
+      ${leaveTable(holidays,'No holiday booked.')}
+    </div>
+    <div class="card"><div class="card-head"><h3>Adjustments</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="adjustmentForm('${id}')">+ Add adjustment</button>`:''}</div>
+      <p class="small muted" style="margin-bottom:10px">Manual tweaks to entitlement (e.g. worked an extra day → +1). Base allowance ${bal.allowance} ${bal.adjustments>=0?'+':'−'} ${Math.abs(bal.adjustments)} adjustment${Math.abs(bal.adjustments)!==1?'s':''} = <strong>${bal.entitlement} days</strong> entitlement.</p>
+      ${adjustments.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Change</th><th>Note</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
+        adjustments.map(a=>`<tr><td>${fmtDate(a.start_date)}</td><td><strong>${a.days>=0?'+':''}${a.days} day${Math.abs(a.days)!==1?'s':''}</strong></td><td class="small">${esc(a.reason)||'—'}</td>${canManage?`<td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="deleteLeave('${a.id}')">Delete</button></td>`:''}</tr>`).join('')
+      }</tbody></table></div>`:'<div class="empty small">No adjustments recorded.</div>'}
+    </div>
+    <div class="card"><div class="card-head"><h3>Other absence</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="leaveForm('${id}',false,'unpaid')">+ Record absence</button>`:''}</div>
+      <p class="small muted" style="margin-bottom:10px">Unpaid leave, maternity/paternity and other. (Sickness has its own tab.)</p>
+      ${other.length?`<div class="table-wrap"><table><thead><tr><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
+        other.map(l=>`<tr><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td>${act(l)}</tr>`).join('')
+      }</tbody></table></div>`:'<div class="empty small">No other absence recorded.</div>'}
+    </div>`;
+}
+async function empTabSickness(body, id){
+  const all = (await idbByIndex('leave','employee_id',id)).filter(l=>l.type==='sickness').sort((a,b)=>b.start_date.localeCompare(a.start_date));
+  const bounds = await holidayYearBounds();
+  const thisYr = all.filter(l=>l.start_date>=bounds.start && l.start_date<=bounds.end);
+  const totalDays = thisYr.reduce((a,l)=>a+l.days,0);
   const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id));
   body.innerHTML = `
     <div class="stat-grid">
-      <div class="stat"><div class="num">${bal.allowance}</div><div class="lbl">Allowance (${bal.bounds.label})</div></div>
-      <div class="stat info"><div class="num">${bal.taken}</div><div class="lbl">Taken</div></div>
-      <div class="stat warn"><div class="num">${bal.pending}</div><div class="lbl">Pending</div></div>
-      <div class="stat ok"><div class="num">${bal.remaining}</div><div class="lbl">Remaining</div></div>
+      <div class="stat ${totalDays>0?'warn':'ok'}"><div class="num">${totalDays}</div><div class="lbl">Sick days (${bounds.label})</div></div>
+      <div class="stat"><div class="num">${thisYr.length}</div><div class="lbl">Episodes (${bounds.label})</div></div>
+      <div class="stat info"><div class="num">${all.length}</div><div class="lbl">Total records</div></div>
     </div>
-    <div class="card"><div class="card-head"><h3>Leave & absence history</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="leaveForm('${id}')">+ Record leave</button>`:''}</div>
-    ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
-      rows.map(l=>`<tr><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td>${canManage?`<td style="text-align:right">${l.status==='pending'?`<button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')">✓</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">✕</button>`:`<button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button>`}</td>`:''}</tr>`).join('')
-    }</tbody></table></div>`:'<div class="empty small">No leave recorded.</div>'}</div>`;
+    <div class="card"><div class="card-head"><h3>Sickness absence</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="leaveForm('${id}',false,'sickness')">+ Record sickness</button>`:''}</div>
+      ${all.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Reason / notes</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
+        all.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td>${canManage?`<td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button></td>`:''}</tr>`).join('')
+      }</tbody></table></div>`:'<div class="empty small">No sickness recorded.</div>'}
+    </div>`;
 }
 async function empTabPerformance(body, id){
   const reviews = (await idbByIndex('reviews','employee_id',id)).sort((a,b)=>(b.scheduled_date||'').localeCompare(a.scheduled_date||''));
@@ -866,7 +964,8 @@ function employeeForm(id){
     <div class="modal-sub">${id?esc(e.first_name+' '+e.last_name):'New employee record'}</div>
     <form onsubmit="saveEmployee(event,'${id||''}')">
       <fieldset><legend>Personal</legend>
-        <div class="form-row">
+        <div class="form-row-3">
+          <div class="form-group"><label>Title</label><select id="f-title"><option value="">—</option>${optionList(TITLES, e.title)}</select></div>
           <div class="form-group"><label class="req">First name</label><input id="f-fn" value="${esc(e.first_name||'')}" required></div>
           <div class="form-group"><label class="req">Last name</label><input id="f-ln" value="${esc(e.last_name||'')}" required></div>
         </div>
@@ -896,7 +995,12 @@ function employeeForm(id){
         <div class="form-row-3">
           <div class="form-group"><label>Site</label><select id="f-site">${SITES.map(s=>`<option ${e.site===s?'selected':''}>${s}</option>`).join('')}</select></div>
           <div class="form-group"><label>Manager</label><select id="f-mgr"><option value="">—</option>${mgrs.map(m=>`<option value="${m.id}" ${e.manager_id===m.id?'selected':''}>${esc(m.first_name+' '+m.last_name)}</option>`).join('')}</select></div>
-          <div class="form-group"><label>Employment type</label><select id="f-type">${['Full-time','Part-time','Fixed-term','Apprentice','Contractor'].map(t=>`<option ${e.employment_type===t?'selected':''}>${t}</option>`).join('')}</select></div>
+          <div class="form-group"><label>Employment type</label><select id="f-type">${optionList(EMPLOYMENT_TYPES, e.employment_type)}</select></div>
+        </div>
+        <div class="form-row-3">
+          <div class="form-group"><label>Working hours / week</label><input id="f-hours" type="number" step="0.5" value="${e.working_hours??''}" placeholder="37.5"></div>
+          <div class="form-group"><label>Notice period</label><input id="f-notice" value="${esc(e.notice_period||'')}" placeholder="1 month"></div>
+          <div class="form-group"><label>Probation end date</label><input id="f-prob" type="date" value="${esc(e.probation_end_date||'')}"></div>
         </div>
         <div class="form-row-3">
           <div class="form-group"><label class="req">Start date</label><input id="f-start" type="date" value="${esc(e.start_date||'')}" required></div>
@@ -928,6 +1032,7 @@ async function saveEmployee(ev, id){
   if (fileEl.files[0]) photo = await fileToDataURL(fileEl.files[0]);
   const rec = {
     id: id || uuid(),
+    title: val('f-title'),
     employee_number: val('f-num'), first_name: val('f-fn'), last_name: val('f-ln'),
     preferred_name: existing?.preferred_name||'',
     date_of_birth: val('f-dob'), gender: val('f-gender'), ni_number: val('f-ni'),
@@ -935,7 +1040,8 @@ async function saveEmployee(ev, id){
     personal_email: val('f-pe'), work_email: val('f-we'), mobile_phone: val('f-mob'), home_phone: existing?.home_phone||'',
     job_title: val('f-jt'), department: val('f-dept'), site: val('f-site'),
     manager_id: val('f-mgr')||null, employment_type: val('f-type'),
-    start_date: val('f-start'), end_date: val('f-end')||null, status: val('f-status'),
+    working_hours: numVal('f-hours'), notice_period: val('f-notice'),
+    start_date: val('f-start'), end_date: val('f-end')||null, probation_end_date: val('f-prob')||null, status: val('f-status'),
     salary: numVal('f-sal'), pay_frequency: existing?.pay_frequency||'Annual',
     bank_sort_code: val('f-sort'), bank_account: val('f-acct'),
     holiday_allowance: numVal('f-hol') ?? DEFAULT_ALLOWANCE,
@@ -962,16 +1068,19 @@ async function contactForm(empId, contactId){
       <div class="form-row"><div class="form-group"><label>Relationship</label><input id="ct-rel" value="${esc(ct.relationship||'')}" placeholder="Spouse, parent…"></div>
       <div class="form-group"><label class="req">Phone</label><input id="ct-phone" value="${esc(ct.phone||'')}" required></div></div>
       <div class="form-group"><label>Email</label><input id="ct-email" type="email" value="${esc(ct.email||'')}"></div>
+      <div class="form-group"><label>Address</label><textarea id="ct-addr" rows="2">${esc(ct.address||'')}</textarea><button type="button" class="btn btn-outline btn-sm" style="margin-top:6px" onclick="fillAddress('ct-addr','${empId}')">Use employee's home address</button></div>
       <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
     </form>`);
 }
+// Copy an employee's home address into an emergency-contact address field
+function fillAddress(targetId, empId){ const e=empById(empId); if(!e)return; const a=[e.address_line1,e.address_line2,e.city,e.postcode].filter(Boolean).join(', '); document.getElementById(targetId).value=a; if(!a) toast('No home address on file','info'); }
 async function saveContact(ev, empId, contactId){
   ev.preventDefault();
-  await idbPut('contacts', { id: contactId||uuid(), employee_id: empId, name: val('ct-name'), relationship: val('ct-rel'), phone: val('ct-phone'), email: val('ct-email') });
+  await idbPut('contacts', { id: contactId||uuid(), employee_id: empId, name: val('ct-name'), relationship: val('ct-rel'), phone: val('ct-phone'), email: val('ct-email'), address: val('ct-addr') });
   closeModal(); toast('Contact saved');
-  empTab('contacts', [...document.querySelectorAll('#emp-tabs .tab')].find(t=>t.textContent.includes('contacts')));
+  refreshEmpTab();
 }
-async function deleteContact(id, empId){ if(!confirm('Delete this contact?'))return; await idbDelete('contacts',id); toast('Contact deleted'); empTab('contacts', [...document.querySelectorAll('#emp-tabs .tab')].find(t=>t.textContent.includes('contacts'))); }
+async function deleteContact(id, empId){ if(!confirm('Delete this contact?'))return; await idbDelete('contacts',id); toast('Contact deleted'); refreshEmpTab(); }
 
 // ═══════════════════════════════════════════════
 // LEAVE / ABSENCE
@@ -982,7 +1091,7 @@ async function renderLeave(c){
   let leave = await idbGetAll('leave');
   if (scope) leave = leave.filter(l => scope.includes(l.employee_id));
   const pending = leave.filter(l=>l.status==='pending').sort((a,b)=>a.start_date.localeCompare(b.start_date));
-  const upcoming = leave.filter(l=>l.status==='approved' && l.end_date>=today()).sort((a,b)=>a.start_date.localeCompare(b.start_date));
+  const upcoming = leave.filter(l=>l.type!=='adjustment' && l.status==='approved' && l.end_date>=today()).sort((a,b)=>a.start_date.localeCompare(b.start_date));
   if (state.user.role==='hr_admin') setTopbar(`<button class="btn btn-accent" onclick="leaveForm()">+ Record leave</button>`);
   c.innerHTML = `
     <div class="card">
@@ -998,13 +1107,9 @@ async function renderLeave(c){
       }</tbody></table></div>`:'<div class="empty small">No upcoming leave.</div>'}
     </div>`;
 }
-// Refresh the in-detail leave tab if open, otherwise re-render the current page.
+// Refresh the in-detail tab if open, otherwise re-render the current page.
 function refreshLeaveViews(){
-  const tabs = document.getElementById('emp-tabs');
-  if (tabs && window._detailEmp){
-    const t = [...tabs.querySelectorAll('.tab')].find(x=>x.textContent.includes('Holiday'));
-    if (t){ empTab('leave', t); return; }
-  }
+  if (window._detailEmp && refreshEmpTab()) return;
   navigate(state.page);
 }
 async function decideLeave(id, decision){
@@ -1018,21 +1123,26 @@ async function decideLeave(id, decision){
 }
 async function deleteLeave(id){ if(!confirm('Delete this leave record?'))return; await idbDelete('leave',id); toast('Deleted'); refreshLeaveViews(); }
 
-async function leaveForm(presetEmp, asEmployee){
+async function leaveForm(presetEmp, asEmployee, presetType){
   const empOptions = state.employees.filter(e=>e.status!=='leaver');
   const isSelf = asEmployee === true;
-  openModal(`<h2>${isSelf?'Book holiday':'Record leave / absence'}</h2>
+  const defType = presetType || 'holiday';
+  const typeEntries = Object.entries(LEAVE_TYPES).filter(([k])=> k!=='adjustment' && (isSelf ? k==='holiday' : true));
+  openModal(`<h2>${isSelf?'Book holiday':'Record '+(LEAVE_TYPES[defType]?LEAVE_TYPES[defType].label.toLowerCase():'leave')}</h2>
     <form onsubmit="saveLeave(event, ${isSelf})">
       ${isSelf?'':`<div class="form-group"><label class="req">Employee</label><select id="lv-emp" required><option value="">Select…</option>${empOptions.map(e=>`<option value="${e.id}" ${presetEmp===e.id?'selected':''}>${esc(e.first_name+' '+e.last_name)}</option>`).join('')}</select></div>`}
       <div class="form-row">
-        <div class="form-group"><label class="req">Type</label><select id="lv-type" onchange="recalcLeaveDays()">${Object.entries(LEAVE_TYPES).filter(([k])=>isSelf?k==='holiday':true).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('')}</select></div>
+        <div class="form-group"><label class="req">Type</label><select id="lv-type" onchange="recalcLeaveDays()">${typeEntries.map(([k,v])=>`<option value="${k}" ${defType===k?'selected':''}>${v.label}</option>`).join('')}</select></div>
         <div class="form-group"><label>Half day</label><select id="lv-half" onchange="recalcLeaveDays()"><option value="false">No</option><option value="true">Yes (single day)</option></select></div>
       </div>
       <div class="form-row">
         <div class="form-group"><label class="req">From</label><input id="lv-start" type="date" value="${today()}" onchange="recalcLeaveDays()" required></div>
         <div class="form-group"><label class="req">To</label><input id="lv-end" type="date" value="${today()}" onchange="recalcLeaveDays()" required></div>
       </div>
-      <div class="form-group"><label>Working days</label><input id="lv-days" type="number" step="0.5" value="1"><div class="small muted">Auto-calculated (Mon–Fri). Adjust if needed.</div></div>
+      <div class="form-row">
+        <div class="form-group"><label>Working days</label><input id="lv-days" type="number" step="0.5" value="1"><div class="small muted">Auto (Mon–Fri); adjust if needed.</div></div>
+        ${isSelf?'':`<div class="form-group"><label>Status</label><select id="lv-status"><option value="approved">Booked (approved)</option><option value="pending">Pending approval</option></select><div class="small muted">Pending doesn't reduce the balance until booked.</div></div>`}
+      </div>
       <div class="form-group"><label>Reason / notes</label><textarea id="lv-reason" rows="2"></textarea></div>
       <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">${isSelf?'Submit request':'Save'}</button></div>
     </form>`);
@@ -1050,20 +1160,42 @@ async function saveLeave(ev, isSelf){
   const empId = isSelf ? state.user.employee_id : val('lv-emp');
   if (!empId){ toast('Select an employee','error'); return; }
   const type = val('lv-type');
+  const status = isSelf ? 'pending' : (val('lv-status') || 'approved');
   const rec = {
     id: uuid(), employee_id: empId, type,
     start_date: val('lv-start'), end_date: val('lv-end'),
     days: Number(val('lv-days'))||0, half_day: val('lv-half')==='true',
-    status: isSelf ? 'pending' : (type==='holiday' ? 'approved' : 'approved'),
+    status,
     reason: val('lv-reason'),
     requested_at: nowISO(),
-    decided_by: isSelf?null:state.user.username, decided_at: isSelf?null:nowISO(), decision_note:''
+    decided_by: status==='pending'?null:state.user.username, decided_at: status==='pending'?null:nowISO(), decision_note:''
   };
   await idbPut('leave', rec);
   await logAction('leave_create', { employee_id:empId, leave_id:rec.id });
   closeModal();
-  toast(isSelf?'Holiday request submitted':'Leave recorded');
-  if (state.page) navigate(state.page);
+  toast(isSelf?'Holiday request submitted':'Saved');
+  refreshLeaveViews();
+}
+// ── Holiday adjustments ──
+function adjustmentForm(empId){
+  openModal(`<h2>Add holiday adjustment</h2><div class="modal-sub">${esc(empName(empId))}</div>
+    <form onsubmit="saveAdjustment(event,'${empId}')">
+      <div class="form-row">
+        <div class="form-group"><label class="req">Days (+ / −)</label><input id="aj-days" type="number" step="0.5" value="1" required><div class="small muted">Negative number deducts days.</div></div>
+        <div class="form-group"><label>Date</label><input id="aj-date" type="date" value="${today()}"></div>
+      </div>
+      <div class="form-group"><label class="req">Note</label><input id="aj-note" placeholder="e.g. Worked extra Friday – day in lieu" required></div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Add adjustment</button></div>
+    </form>`);
+}
+async function saveAdjustment(ev, empId){
+  ev.preventDefault();
+  const days = Number(val('aj-days'))||0;
+  if (!days){ toast('Enter a non-zero number of days','error'); return; }
+  const date = val('aj-date')||today();
+  await idbPut('leave', { id:uuid(), employee_id:empId, type:'adjustment', start_date:date, end_date:date, days, half_day:false, status:'approved', reason:val('aj-note'), requested_at:nowISO(), decided_by:state.user.username, decided_at:nowISO(), decision_note:'' });
+  await logAction('holiday_adjustment', { employee_id:empId });
+  closeModal(); toast('Adjustment added'); refreshLeaveViews();
 }
 
 // ═══════════════════════════════════════════════
@@ -1285,7 +1417,7 @@ async function renderReports(c){
     </div>
 
     <div class="card"><div class="card-head"><h3>Annual leave balances</h3><button class="btn btn-outline btn-sm" onclick="exportLeaveBalances()">Export CSV</button></div>
-      <div class="table-wrap"><table id="rep-leave"><thead><tr><th>Employee</th><th>Site</th><th>Allowance</th><th>Taken</th><th>Pending</th><th>Remaining</th></tr></thead><tbody><tr><td colspan="6" class="muted">Loading…</td></tr></tbody></table></div>
+      <div class="table-wrap"><table id="rep-leave"><thead><tr><th>Employee</th><th>Site</th><th>Allowance</th><th>Adj</th><th>Entitlement</th><th>Booked</th><th>Pending</th><th>Remaining</th></tr></thead><tbody><tr><td colspan="8" class="muted">Loading…</td></tr></tbody></table></div>
     </div>
 
     <div class="card"><div class="card-head"><h3>Current employees</h3><button class="btn btn-outline btn-sm" onclick="exportHeadcount()">Export CSV</button></div>
@@ -1299,19 +1431,19 @@ async function renderReports(c){
   const rows = [];
   for (const e of active.sort((a,b)=>a.last_name.localeCompare(b.last_name))){
     const b = await leaveBalance(e.id);
-    rows.push(`<tr><td>${esc(e.first_name+' '+e.last_name)}</td><td>${esc(e.site)}</td><td>${b.allowance}</td><td>${b.taken}</td><td>${b.pending}</td><td><strong>${b.remaining}</strong></td></tr>`);
+    rows.push(`<tr><td>${esc(e.first_name+' '+e.last_name)}</td><td>${esc(e.site)}</td><td>${b.allowance}</td><td>${b.adjustments?(b.adjustments>0?'+':'')+b.adjustments:'—'}</td><td>${b.entitlement}</td><td>${b.booked}</td><td>${b.pending}</td><td><strong>${b.remaining}</strong></td></tr>`);
   }
-  tb.innerHTML = rows.join('') || '<tr><td colspan="6" class="muted">—</td></tr>';
+  tb.innerHTML = rows.join('') || '<tr><td colspan="8" class="muted">—</td></tr>';
 }
-function serviceYears(start){ if(!start) return '—'; const d=new Date(start); const y=(Date.now()-d)/(365.25*24*3600*1000); return y<1?`${Math.round(y*12)} mo`:`${y.toFixed(1)} yr`; }
+function serviceYears(start){ return serviceYM(start); }
 function exportHeadcount(){
   const rows = [['Number','First name','Last name','Job title','Department','Site','Employment type','Start date','Status']];
   state.employees.filter(e=>e.status==='active').forEach(e=>rows.push([e.employee_number,e.first_name,e.last_name,e.job_title,e.department,e.site,e.employment_type,e.start_date,e.status]));
   downloadCSV('komfort-headcount.csv', rows);
 }
 async function exportLeaveBalances(){
-  const rows = [['Employee','Site','Allowance','Taken','Pending','Remaining']];
-  for (const e of state.employees.filter(x=>x.status==='active')){ const b=await leaveBalance(e.id); rows.push([e.first_name+' '+e.last_name,e.site,b.allowance,b.taken,b.pending,b.remaining]); }
+  const rows = [['Employee','Site','Allowance','Adjustments','Entitlement','Booked','Pending','Remaining']];
+  for (const e of state.employees.filter(x=>x.status==='active')){ const b=await leaveBalance(e.id); rows.push([e.first_name+' '+e.last_name,e.site,b.allowance,b.adjustments,b.entitlement,b.booked,b.pending,b.remaining]); }
   downloadCSV('komfort-leave-balances.csv', rows);
 }
 async function exportAbsence(){
@@ -1480,7 +1612,7 @@ async function renderMyProfile(c){
   const e = empById(id);
   const contacts = await idbByIndex('contacts','employee_id',id);
   c.innerHTML = `
-    <div class="card"><div class="detail-head">${avatarHtml(e,true)}<div class="who"><h2>${esc(e.first_name)} ${esc(e.last_name)}</h2><div class="muted">${esc(e.job_title)} · ${esc(e.department)} · ${esc(e.site)}</div><div class="small muted">${esc(e.employee_number)} · Started ${fmtDate(e.start_date)}${e.manager_id?` · Manager: ${esc(empName(e.manager_id))}`:''}</div></div></div></div>
+    <div class="card"><div class="detail-head">${avatarHtml(e,true)}<div class="who"><h2>${e.title?esc(e.title)+' ':''}${esc(e.first_name)} ${esc(e.last_name)}</h2><div class="muted">${esc(e.job_title)} · ${esc(e.department)} · ${esc(e.site)}</div><div class="small muted">${esc(e.employee_number)} · Started ${fmtDate(e.start_date)} (${serviceYM(e.start_date)})${e.manager_id?` · Manager: ${esc(empName(e.manager_id))}`:''}</div></div></div></div>
     <div class="card"><div class="card-head"><h3>My details</h3><button class="btn btn-outline btn-sm" onclick="myDetailsForm()">Update contact details</button></div>
       <dl class="kv">
         <dt>Date of birth</dt><dd>${fmtDate(e.date_of_birth)}</dd>
@@ -1493,7 +1625,7 @@ async function renderMyProfile(c){
       </dl>
     </div>
     <div class="card"><div class="card-head"><h3>Emergency contacts</h3><button class="btn btn-accent btn-sm" onclick="myContactForm()">+ Add contact</button></div>
-      ${contacts.length?contacts.map(ct=>`<div class="doc-row"><div class="dic">☎</div><div class="di"><div class="t">${esc(ct.name)} <span class="small muted">(${esc(ct.relationship)})</span></div><div class="small muted">${esc(ct.phone)}${ct.email?` · ${esc(ct.email)}`:''}</div></div><button class="btn btn-danger btn-sm" onclick="deleteMyContact('${ct.id}')">×</button></div>`).join(''):'<div class="empty small">No emergency contacts. Please add one.</div>'}
+      ${contacts.length?contacts.map(ct=>`<div class="doc-row"><div class="dic">☎</div><div class="di"><div class="t">${esc(ct.name)} <span class="small muted">(${esc(ct.relationship)})</span></div><div class="small muted">${esc(ct.phone)}${ct.email?` · ${esc(ct.email)}`:''}</div>${ct.address?`<div class="small muted">${esc(ct.address)}</div>`:''}</div><button class="btn btn-danger btn-sm" onclick="deleteMyContact('${ct.id}')">×</button></div>`).join(''):'<div class="empty small">No emergency contacts. Please add one.</div>'}
     </div>
     <div class="card"><button class="btn btn-outline" onclick="changeMyPassword()">Change my password</button></div>`;
 }
@@ -1527,12 +1659,13 @@ function myContactForm(){
       <div class="form-group"><label class="req">Name</label><input id="mc-name" required></div>
       <div class="form-row"><div class="form-group"><label>Relationship</label><input id="mc-rel"></div><div class="form-group"><label class="req">Phone</label><input id="mc-phone" required></div></div>
       <div class="form-group"><label>Email</label><input id="mc-email" type="email"></div>
+      <div class="form-group"><label>Address</label><textarea id="mc-addr" rows="2"></textarea><button type="button" class="btn btn-outline btn-sm" style="margin-top:6px" onclick="fillAddress('mc-addr','${state.user.employee_id}')">Use my home address</button></div>
       <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
     </form>`);
 }
 async function saveMyContact(ev){
   ev.preventDefault();
-  await idbPut('contacts', { id:uuid(), employee_id:state.user.employee_id, name:val('mc-name'), relationship:val('mc-rel'), phone:val('mc-phone'), email:val('mc-email') });
+  await idbPut('contacts', { id:uuid(), employee_id:state.user.employee_id, name:val('mc-name'), relationship:val('mc-rel'), phone:val('mc-phone'), email:val('mc-email'), address:val('mc-addr') });
   closeModal(); toast('Contact added'); navigate('my-profile');
 }
 async function deleteMyContact(id){ if(!confirm('Delete this contact?'))return; await idbDelete('contacts',id); toast('Deleted'); navigate('my-profile'); }
@@ -1541,20 +1674,27 @@ async function renderMyLeave(c){
   const id = state.user.employee_id;
   if (!id){ c.innerHTML='<div class="empty">No employee record linked to your account.</div>'; return; }
   const bal = await leaveBalance(id);
-  const rows = (await idbByIndex('leave','employee_id',id)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
+  const all = (await idbByIndex('leave','employee_id',id)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
+  const holidays = all.filter(l=>l.type==='holiday');
+  const sickness = all.filter(l=>l.type==='sickness');
+  const other = all.filter(l=>OTHER_ABSENCE.includes(l.type));
+  const adjustments = all.filter(l=>l.type==='adjustment');
   setTopbar(`<button class="btn btn-accent" onclick="leaveForm(null,true)">+ Book holiday</button>`);
-  c.innerHTML = `
-    <div class="stat-grid">
-      <div class="stat"><div class="num">${bal.allowance}</div><div class="lbl">Allowance (${bal.bounds.label})</div></div>
-      <div class="stat info"><div class="num">${bal.taken}</div><div class="lbl">Taken</div></div>
-      <div class="stat warn"><div class="num">${bal.pending}</div><div class="lbl">Pending approval</div></div>
-      <div class="stat ok"><div class="num">${bal.remaining}</div><div class="lbl">Remaining</div></div>
+  c.innerHTML = balanceTiles(bal) + `
+    <div class="card"><div class="card-head"><h3>My holiday</h3><button class="btn btn-accent btn-sm" onclick="leaveForm(null,true)">+ Book holiday</button></div>
+      ${holidays.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th><th></th></tr></thead><tbody>${
+        holidays.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td><td style="text-align:right">${l.status==='pending'?`<button class="btn btn-outline btn-sm" onclick="cancelMyLeave('${l.id}')">Cancel</button>`:''}</td></tr>`).join('')
+      }</tbody></table></div>`:'<div class="empty small">No holiday booked yet.</div>'}
     </div>
-    <div class="card"><div class="card-head"><h3>My leave & absence</h3><button class="btn btn-accent btn-sm" onclick="leaveForm(null,true)">+ Book holiday</button></div>
-      ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th><th></th></tr></thead><tbody>${
-        rows.map(l=>`<tr><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td><td style="text-align:right">${l.status==='pending'?`<button class="btn btn-outline btn-sm" onclick="cancelMyLeave('${l.id}')">Cancel</button>`:''}</td></tr>`).join('')
-      }</tbody></table></div>`:'<div class="empty small">No leave booked yet.</div>'}
-    </div>`;
+    ${adjustments.length?`<div class="card"><div class="card-head"><h3>Holiday adjustments</h3></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Change</th><th>Note</th></tr></thead><tbody>${
+      adjustments.map(a=>`<tr><td>${fmtDate(a.start_date)}</td><td><strong>${a.days>=0?'+':''}${a.days} day${Math.abs(a.days)!==1?'s':''}</strong></td><td class="small">${esc(a.reason)||'—'}</td></tr>`).join('')
+    }</tbody></table></div></div>`:''}
+    ${sickness.length?`<div class="card"><div class="card-head"><h3>My sickness</h3></div><div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Reason</th></tr></thead><tbody>${
+      sickness.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td></tr>`).join('')
+    }</tbody></table></div></div>`:''}
+    ${other.length?`<div class="card"><div class="card-head"><h3>Other absence</h3></div><div class="table-wrap"><table><thead><tr><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th></tr></thead><tbody>${
+      other.map(l=>`<tr><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td></tr>`).join('')
+    }</tbody></table></div></div>`:''}`;
 }
 async function cancelMyLeave(id){ if(!confirm('Cancel this request?'))return; const l=(await idbGetAll('leave')).find(x=>x.id===id); l.status='cancelled'; await idbPut('leave',l); toast('Request cancelled'); navigate('my-leave'); }
 

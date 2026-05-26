@@ -71,10 +71,10 @@ app.post('/api/auth/change-password', authenticateToken, (req, res) => {
 });
 
 // ════════════════ EMPLOYEES ════════════════
-const EMP_FIELDS = ['employee_number','first_name','last_name','preferred_name','date_of_birth','gender','ni_number',
+const EMP_FIELDS = ['title','employee_number','first_name','last_name','preferred_name','date_of_birth','gender','ni_number',
   'address_line1','address_line2','city','postcode','personal_email','work_email','mobile_phone','home_phone',
-  'job_title','department','site','manager_id','employment_type','start_date','end_date','status','salary',
-  'pay_frequency','bank_sort_code','bank_account','holiday_allowance','photo','notes'];
+  'job_title','department','site','manager_id','employment_type','working_hours','notice_period','start_date','end_date',
+  'probation_end_date','status','salary','pay_frequency','bank_sort_code','bank_account','holiday_allowance','photo','notes'];
 
 app.get('/api/employees', authenticateToken, requireRole('hr_admin', 'manager'), (req, res) => {
   let rows = queryAll('SELECT * FROM employees ORDER BY last_name, first_name');
@@ -135,9 +135,9 @@ app.get('/api/employees/:id/contacts', authenticateToken, (req, res) => {
 app.post('/api/employees/:id/contacts', authenticateToken, (req, res) => {
   if (!canAccessEmployee(req.user, req.params.id)) return res.status(403).json({ error: 'Forbidden' });
   const id = uuidv4();
-  const { name, relationship, phone, email } = req.body;
-  runSql('INSERT INTO contacts (id, employee_id, name, relationship, phone, email) VALUES (?, ?, ?, ?, ?, ?)',
-    [id, req.params.id, name, relationship || null, phone || null, email || null]);
+  const { name, relationship, phone, email, address } = req.body;
+  runSql('INSERT INTO contacts (id, employee_id, name, relationship, phone, email, address) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [id, req.params.id, name, relationship || null, phone || null, email || null, address || null]);
   res.status(201).json(queryGet('SELECT * FROM contacts WHERE id = ?', [id]));
 });
 app.delete('/api/contacts/:id', authenticateToken, (req, res) => {
