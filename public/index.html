@@ -65,8 +65,11 @@
 
     /* ── Stat tiles ── */
     .stat-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(170px,1fr)); gap: 16px; margin-bottom: 16px; }
-    .stat { background: var(--card); border-radius: 12px; box-shadow: var(--shadow); padding: 18px; border-left: 5px solid var(--accent); }
+    .stat { background: var(--card); border-radius: 12px; box-shadow: var(--shadow); padding: 18px; border-left: 5px solid var(--accent); position: relative; }
     .stat .num { font-size: 2rem; font-weight: 700; color: var(--primary); }
+    .stat.clickable { cursor: pointer; transition: transform .15s, box-shadow .15s; }
+    .stat.clickable:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(64,64,66,0.18); }
+    .stat.clickable::after { content: "›"; position: absolute; top: 12px; right: 14px; color: var(--text-light); font-size: 1.2rem; opacity: .5; }
     .stat .lbl { color: var(--text-light); font-size: 0.85rem; margin-top: 2px; }
     .stat.warn { border-left-color: var(--warning); }
     .stat.ok { border-left-color: var(--success); }
@@ -659,14 +662,25 @@ async function leaveBalance(employeeId){
   // separately and does NOT reduce the balance until it's approved/booked.
   return { allowance, adjustments, entitlement, booked, taken: booked, pending, remaining: entitlement - booked, bounds };
 }
-// Reusable holiday balance tiles
-function balanceTiles(bal){
+// Reusable holiday balance tiles. Pass empId to make Booked/Pending clickable.
+function balanceTiles(bal, empId){
+  const bk = empId ? `class="stat info clickable" onclick="openHolidayList('${empId}','booked')"` : 'class="stat info"';
+  const pd = empId ? `class="stat warn clickable" onclick="openHolidayList('${empId}','pending')"` : 'class="stat warn"';
   return `<div class="stat-grid">
       <div class="stat"><div class="num">${bal.entitlement}</div><div class="lbl">Entitlement (${bal.bounds.label})${bal.adjustments?` · ${bal.allowance}+${bal.adjustments}`:''}</div></div>
-      <div class="stat info"><div class="num">${bal.booked}</div><div class="lbl">Booked</div></div>
-      <div class="stat warn"><div class="num">${bal.pending}</div><div class="lbl">Pending approval</div></div>
+      <div ${bk}><div class="num">${bal.booked}</div><div class="lbl">Booked</div></div>
+      <div ${pd}><div class="num">${bal.pending}</div><div class="lbl">Pending approval</div></div>
       <div class="stat ok"><div class="num">${bal.remaining}</div><div class="lbl">Remaining</div></div>
     </div>`;
+}
+// Drill-down list for a holiday balance tile
+async function openHolidayList(empId, kind){
+  const bounds = await holidayYearBounds();
+  const rows = (await idbByIndex('leave','employee_id',empId)).filter(l=>l.type==='holiday' && l.start_date>=bounds.start && l.start_date<=bounds.end);
+  const list = (kind==='booked' ? rows.filter(l=>l.status==='approved') : rows.filter(l=>l.status==='pending')).sort((a,b)=>a.start_date.localeCompare(b.start_date));
+  const label = kind==='booked' ? 'Booked holiday' : 'Pending holiday';
+  const body = list.length ? `<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Reason</th></tr></thead><tbody>${list.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty small">None.</div>';
+  openModal(`<h2>${label} — ${esc(empName(empId))}</h2><div class="modal-sub">${bounds.label}</div><div>${body}</div><div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Close</button></div>`);
 }
 // Length of service as "X years, Y months"
 function serviceYM(start){
@@ -721,12 +735,12 @@ async function renderDashboard(c){
 
   c.innerHTML = `
     <div class="stat-grid">
-      <div class="stat"><div class="num">${active.length}</div><div class="lbl">Active employees</div></div>
-      <div class="stat info"><div class="num">${offToday.length}</div><div class="lbl">Off today</div></div>
-      <div class="stat warn"><div class="num">${pending.length}</div><div class="lbl">Leave to approve</div></div>
-      <div class="stat ${sickDays>0?'warn':'ok'}"><div class="num">${sickDays}</div><div class="lbl">Sick days (${bounds.label})</div></div>
-      <div class="stat ${probDue.length?'warn':''}"><div class="num">${probDue.length}</div><div class="lbl">Probation reviews due</div></div>
-      <div class="stat"><div class="num">${myTasks.length}</div><div class="lbl">Open tasks</div></div>
+      <div class="stat clickable" onclick="openDashList('active')"><div class="num">${active.length}</div><div class="lbl">Active employees</div></div>
+      <div class="stat info clickable" onclick="openDashList('offtoday')"><div class="num">${offToday.length}</div><div class="lbl">Off today</div></div>
+      <div class="stat warn clickable" onclick="openDashList('pending')"><div class="num">${pending.length}</div><div class="lbl">Leave to approve</div></div>
+      <div class="stat ${sickDays>0?'warn':'ok'} clickable" onclick="openDashList('sick')"><div class="num">${sickDays}</div><div class="lbl">Sick days (${bounds.label})</div></div>
+      <div class="stat ${probDue.length?'warn':''} clickable" onclick="openDashList('probation')"><div class="num">${probDue.length}</div><div class="lbl">Probation reviews due</div></div>
+      <div class="stat clickable" onclick="openDashList('tasks')"><div class="num">${myTasks.length}</div><div class="lbl">Open tasks</div></div>
     </div>
 
     ${probDue.length?`<div class="card">
@@ -755,6 +769,51 @@ async function renderDashboard(c){
     </div>`;
 }
 function priorityBadge(p){ const m={high:['High','b-red'],medium:['Medium','b-amber'],low:['Low','b-grey']}; const [t,cl]=m[p]||[p,'b-grey']; return `<span class="badge ${cl}">${t}</span>`; }
+
+// Drill-down list when a dashboard tile is clicked
+async function openDashList(kind){
+  const isMgr = state.user.role==='manager';
+  const team = isMgr ? teamMemberIds() : null;
+  const inScope = id => !team || team.includes(id);
+  const bounds = await holidayYearBounds();
+  const tableWrap = (cols, body, empty) => body ? `<div class="table-wrap"><table><thead><tr>${cols}</tr></thead><tbody>${body}</tbody></table></div>` : `<div class="empty small">${empty}</div>`;
+  let title='', html='';
+  if (kind==='active'){
+    const list = state.employees.filter(e=>e.status==='active' && inScope(e.id)).sort((a,b)=>a.last_name.localeCompare(b.last_name));
+    title = `Active employees (${list.length})`;
+    html = tableWrap('<th>Name</th><th>Job title</th><th>Dept</th><th>Site</th>',
+      list.map(e=>`<tr class="clickable" onclick="closeModal();employeeDetail('${e.id}')"><td>${esc(e.first_name+' '+e.last_name)}</td><td>${esc(e.job_title)}</td><td>${esc(e.department)}</td><td>${esc(e.site)}</td></tr>`).join(''), 'No active employees.');
+  } else if (kind==='offtoday'){
+    const list = (await idbGetAll('leave')).filter(l=>l.type!=='adjustment' && l.status==='approved' && l.start_date<=today() && l.end_date>=today() && inScope(l.employee_id)).sort((a,b)=>a.end_date.localeCompare(b.end_date));
+    title = `Off today (${list.length})`;
+    html = tableWrap('<th>Employee</th><th>Type</th><th>From</th><th>Back</th>',
+      list.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(addDays(l.end_date,1))}</td></tr>`).join(''), 'Everyone is in today.');
+  } else if (kind==='pending'){
+    const list = (await idbGetAll('leave')).filter(l=>l.status==='pending' && inScope(l.employee_id)).sort((a,b)=>a.start_date.localeCompare(b.start_date));
+    title = `Leave to approve (${list.length})`;
+    html = tableWrap('<th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Days</th><th></th>',
+      list.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td style="text-align:right;white-space:nowrap"><button class="btn btn-success btn-sm" onclick="closeModal();decideLeave('${l.id}','approved')">Approve</button> <button class="btn btn-danger btn-sm" onclick="closeModal();decideLeave('${l.id}','rejected')">Reject</button></td></tr>`).join(''), 'Nothing awaiting approval.');
+  } else if (kind==='sick'){
+    const list = (await idbGetAll('leave')).filter(l=>l.type==='sickness' && l.status==='approved' && l.start_date>=bounds.start && l.start_date<=bounds.end && inScope(l.employee_id)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
+    const total = list.reduce((a,l)=>a+l.days,0);
+    title = `Sickness — ${total} day${total!==1?'s':''} (${bounds.label})`;
+    html = tableWrap('<th>Employee</th><th>From</th><th>To</th><th>Days</th><th>Reason</th>',
+      list.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td></tr>`).join(''), 'No sickness recorded this year.');
+  } else if (kind==='probation'){
+    const list = state.employees.filter(e=>e.status==='active' && inScope(e.id) && e.probation_end_date && e.probation_end_date<=addDays(today(),45)).sort((a,b)=>a.probation_end_date.localeCompare(b.probation_end_date));
+    title = `Probation reviews due (${list.length})`;
+    html = tableWrap('<th>Employee</th><th>Job title</th><th>Manager</th><th>Probation ends</th>',
+      list.map(e=>`<tr class="clickable" onclick="closeModal();employeeDetail('${e.id}')"><td>${esc(e.first_name+' '+e.last_name)}</td><td>${esc(e.job_title)}</td><td>${e.manager_id?esc(empName(e.manager_id)):'—'}</td><td>${fmtDate(e.probation_end_date)} ${e.probation_end_date<today()?'<span class="badge b-red">Overdue</span>':'<span class="badge b-amber">Due soon</span>'}</td></tr>`).join(''), 'No probation reviews due.');
+  } else if (kind==='tasks'){
+    let list = (await idbGetAll('tasks')).filter(t=>t.status!=='done');
+    if (isMgr) list = list.filter(t=>t.assigned_to===state.user.id);
+    list.sort((a,b)=>(a.due_date||'').localeCompare(b.due_date||''));
+    title = `Open tasks (${list.length})`;
+    html = tableWrap('<th>Task</th><th>Related to</th><th>Due</th><th>Priority</th>',
+      list.map(t=>`<tr><td>${esc(t.title)}${t.due_date&&t.due_date<today()?' <span class="badge b-red">Overdue</span>':''}</td><td>${t.related_employee_id?esc(empName(t.related_employee_id)):'—'}</td><td>${fmtDate(t.due_date)}</td><td>${priorityBadge(t.priority)}</td></tr>`).join(''), 'No open tasks.');
+  }
+  openModal(`<h2>${title}</h2><div style="margin-top:12px">${html}</div><div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Close</button></div>`, true);
+}
 
 // ═══════════════════════════════════════════════
 // EMPLOYEES
@@ -917,7 +976,7 @@ async function empTabLeave(body, id){
   const leaveTable = (list,empty) => list.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
       list.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td>${act(l)}</tr>`).join('')
     }</tbody></table></div>`:`<div class="empty small">${empty}</div>`;
-  body.innerHTML = balanceTiles(bal) + `
+  body.innerHTML = balanceTiles(bal, id) + `
     <div class="card"><div class="card-head"><h3>Holiday bookings</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="leaveForm('${id}',false,'holiday')">+ Add holiday</button>`:''}</div>
       ${leaveTable(holidays,'No holiday booked.')}
     </div>
@@ -1259,8 +1318,8 @@ async function renderPerformance(c){
       }</tbody></table></div>`:'<div class="empty small">No reviews scheduled. Open an employee record to schedule one.</div>'}
     </div>
     <div class="card"><div class="card-head"><h3>Objectives across ${isMgr?'your team':'the company'}</h3></div>
-      ${objectives.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Objective</th><th>Target</th><th>Progress</th><th>Status</th></tr></thead><tbody>${
-        objectives.sort((a,b)=>(a.target_date||'').localeCompare(b.target_date||'')).map(o=>`<tr><td>${esc(empName(o.employee_id))}</td><td>${esc(o.title)}</td><td>${fmtDate(o.target_date)}</td><td><div class="progress"><div style="width:${o.progress}%"></div></div></td><td>${objStatusBadge(o.status)}</td></tr>`).join('')
+      ${objectives.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Objective</th><th>Target</th><th>Progress</th><th>Status</th><th></th></tr></thead><tbody>${
+        objectives.sort((a,b)=>(a.target_date||'').localeCompare(b.target_date||'')).map(o=>`<tr><td>${esc(empName(o.employee_id))}</td><td>${esc(o.title)}</td><td>${fmtDate(o.target_date)}</td><td><div class="progress"><div style="width:${o.progress}%"></div></div></td><td>${objStatusBadge(o.status)}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="objectiveForm('${o.employee_id}','${o.id}')">Edit</button></td></tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">No objectives set.</div>'}
     </div>`;
 }
@@ -1717,7 +1776,7 @@ async function renderMyLeave(c){
   const holidays = all.filter(l=>l.type==='holiday');
   const adjustments = all.filter(l=>l.type==='adjustment');
   setTopbar(`<button class="btn btn-accent" onclick="leaveForm(null,true)">+ Book holiday</button>`);
-  c.innerHTML = balanceTiles(bal) + `
+  c.innerHTML = balanceTiles(bal, id) + `
     <div class="card"><div class="card-head"><h3>My holiday</h3><button class="btn btn-accent btn-sm" onclick="leaveForm(null,true)">+ Book holiday</button></div>
       ${holidays.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th><th></th></tr></thead><tbody>${
         holidays.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td><td style="text-align:right">${l.status==='pending'?`<button class="btn btn-outline btn-sm" onclick="cancelMyLeave('${l.id}')">Cancel</button>`:''}</td></tr>`).join('')
