@@ -401,14 +401,18 @@ async function seedDefaults(){
     start_date:o.start, end_date:o.end||null, probation_end_date:o.prob||null,
     status:o.status||'active', salary:o.sal, pay_frequency:'Annual',
     bank_sort_code:'', bank_account:'',
+    car_allowance_monthly: o.car ?? 0,
+    car_sacrifice_monthly: o.carsac ?? 0,
+    pension_sacrifice_pct: o.pensac ?? 5,
+    employer_pension_pct: o.erpen ?? 8,
     holiday_allowance:o.hol||DEFAULT_ALLOWANCE,
     photo:null, notes:'', created_at:nowISO(), updated_at:nowISO()
   });
   const emps = [
-    mk(mgrId,{ttl:'Mrs',num:'KP-001',fn:'Sarah',ln:'Mitchell',dob:'1980-04-12',g:'Female',ni:'AB123456C',a1:'14 Mill Lane',city:'Leeds',pc:'LS10 1AB',we:'s.mitchell@komfort.com',pe:'sarah.m@gmail.com',mob:'07700 900111',jt:'Operations Manager',dept:'Management',site:'Leeds',type:'Permanent',hours:39,notice:'3 months',start:'2015-03-01',sal:62000,hol:28}),
+    mk(mgrId,{ttl:'Mrs',num:'KP-001',fn:'Sarah',ln:'Mitchell',dob:'1980-04-12',g:'Female',ni:'AB123456C',a1:'14 Mill Lane',city:'Leeds',pc:'LS10 1AB',we:'s.mitchell@komfort.com',pe:'sarah.m@gmail.com',mob:'07700 900111',jt:'Operations Manager',dept:'Management',site:'Leeds',type:'Permanent',hours:39,notice:'3 months',start:'2015-03-01',sal:62000,hol:28,car:350,carsac:200}),
     mk(empId,{ttl:'Mr',num:'KP-014',fn:'James',ln:'Okafor',dob:'1992-09-23',g:'Male',ni:'CD654321B',a1:'5 Beech Road',city:'Leeds',pc:'LS11 4QT',we:'j.okafor@komfort.com',pe:'jokafor@outlook.com',mob:'07700 900222',jt:'Production Operative',dept:'Manufacturing',site:'Leeds',mgr:mgrId,type:'Permanent',hours:39,notice:'1 month',start:'2021-06-14',sal:31000,hol:25}),
     mk(e3,{ttl:'Ms',num:'KP-022',fn:'Priya',ln:'Sharma',dob:'1995-01-30',g:'Female',ni:'EF112233A',a1:'88 Oak Avenue',city:'Crawley',pc:'RH10 8GH',we:'p.sharma@komfort.com',mob:'07700 900333',jt:'Sales Executive',dept:'Sales',site:'Crawley',mgr:mgrId,type:'Contract',hours:37.5,notice:'1 month',start:addDays(today(),-160),prob:addDays(today(),20),sal:34000,hol:25}),
-    mk(e4,{ttl:'Mr',num:'KP-009',fn:'David',ln:'Thompson',dob:'1975-11-05',g:'Male',ni:'GH445566D',a1:'3 Station Close',city:'Leeds',pc:'LS9 7RR',we:'d.thompson@komfort.com',mob:'07700 900444',jt:'Senior Installer',dept:'Installation',site:'Axcess-10',mgr:mgrId,type:'Permanent',hours:42,notice:'1 month',start:'2018-08-13',sal:38000,hol:26}),
+    mk(e4,{ttl:'Mr',num:'KP-009',fn:'David',ln:'Thompson',dob:'1975-11-05',g:'Male',ni:'GH445566D',a1:'3 Station Close',city:'Leeds',pc:'LS9 7RR',we:'d.thompson@komfort.com',mob:'07700 900444',jt:'Senior Installer',dept:'Installation',site:'Axcess-10',mgr:mgrId,type:'Permanent',hours:42,notice:'1 month',start:'2018-08-13',sal:38000,hol:26,car:250}),
     mk(e5,{ttl:'Mrs',num:'KP-005',fn:'Linda',ln:'Carter',dob:'1988-07-19',g:'Female',ni:'IJ778899E',a1:'21 Elmwood Drive',city:'Leeds',pc:'LS12 2AA',we:'l.carter@komfort.com',mob:'07700 900555',jt:'Finance Assistant',dept:'Finance',site:'Leeds',mgr:mgrId,type:'Casual',hours:22.5,notice:'1 week',start:'2019-10-01',end:'2025-12-31',status:'leaver',sal:29000,hol:20})
   ];
   for (const e of emps) await idbPut('employees', e);
@@ -980,6 +984,10 @@ function empTabEmployment(body, id){
     <dt>End date</dt><dd>${fmtDate(e.end_date)}</dd>
     <dt>Status</dt><dd>${statusBadge(e.status)}</dd>
     ${showSalary?`<dt>Salary</dt><dd>${fmtMoney(e.salary)} (${esc(e.pay_frequency)})</dd>
+    <dt>Car allowance</dt><dd>${e.car_allowance_monthly?'£'+Number(e.car_allowance_monthly).toFixed(2)+' / month':'—'}</dd>
+    <dt>Salary sacrifice (car)</dt><dd>${e.car_sacrifice_monthly?'£'+Number(e.car_sacrifice_monthly).toFixed(2)+' / month':'—'}</dd>
+    <dt>Salary sacrifice (pension)</dt><dd>${e.pension_sacrifice_pct?Number(e.pension_sacrifice_pct).toFixed(1)+'% of basic':'—'}</dd>
+    <dt>Employer pension</dt><dd>${e.employer_pension_pct?Number(e.employer_pension_pct).toFixed(1)+'% of basic':'—'}</dd>
     <dt>Bank sort code</dt><dd>${esc(e.bank_sort_code)||'—'}</dd>
     <dt>Bank account</dt><dd>${esc(e.bank_account)||'—'}</dd>`:''}
     <dt>Holiday allowance</dt><dd>${e.holiday_allowance} days/yr</dd>
@@ -1135,6 +1143,16 @@ function employeeForm(id){
         </div>
         <div class="form-group"><label>Notes</label><textarea id="f-notes" rows="2">${esc(e.notes||'')}</textarea></div>
       </fieldset>
+      <fieldset><legend>Payroll</legend>
+        <div class="form-row">
+          <div class="form-group"><label>Car allowance (£ / month)</label><input id="f-car-allow" type="number" step="0.01" value="${e.car_allowance_monthly??0}"></div>
+          <div class="form-group"><label>Salary sacrifice – car (£ / month)</label><input id="f-car-sac" type="number" step="0.01" value="${e.car_sacrifice_monthly??0}"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Salary sacrifice – pension (% of basic)</label><input id="f-pen-sac-pct" type="number" step="0.1" value="${e.pension_sacrifice_pct??5}"></div>
+          <div class="form-group"><label>Employer pension (% of basic)</label><input id="f-er-pen-pct" type="number" step="0.1" value="${e.employer_pension_pct??8}"></div>
+        </div>
+      </fieldset>
       <div class="modal-actions">
         <button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button>
         <button type="submit" class="btn btn-primary">${id?'Save changes':'Add employee'}</button>
@@ -1161,6 +1179,10 @@ async function saveEmployee(ev, id){
     start_date: val('f-start'), end_date: val('f-end')||null, probation_end_date: val('f-prob')||null, status: val('f-status'),
     salary: numVal('f-sal'), pay_frequency: existing?.pay_frequency||'Annual',
     bank_sort_code: val('f-sort'), bank_account: val('f-acct'),
+    car_allowance_monthly: Number(val('f-car-allow'))||0,
+    car_sacrifice_monthly: Number(val('f-car-sac'))||0,
+    pension_sacrifice_pct: Number(val('f-pen-sac-pct'))||0,
+    employer_pension_pct: Number(val('f-er-pen-pct'))||0,
     holiday_allowance: numVal('f-hol') ?? DEFAULT_ALLOWANCE,
     photo, notes: val('f-notes'),
     created_at: existing?.created_at || nowISO(), updated_at: nowISO()
@@ -1742,6 +1764,126 @@ async function payComponentsSorted(){
   return (await idbGetAll('pay_components')).filter(c=>c.enabled).sort((a,b)=>(a.display_order||0)-(b.display_order||0));
 }
 
+// ─── UK PAYE / NIC calculation engine ───
+// Simplified Month 1 / non-cumulative calculation. Rates default to 2025/26.
+// All thresholds + rates are stored as settings so they can be updated later
+// (or pulled from HMRC once that integration is added).
+async function getPayrollSettings(){
+  const g = (k,d)=>getSetting(k,d).then(v=>v==null?d:Number(v));
+  return {
+    paye: {
+      basicPct:        await g('paye_basic_pct', 20),
+      higherPct:       await g('paye_higher_pct', 40),
+      additionalPct:   await g('paye_additional_pct', 45),
+      basicBandMonthly:  await g('paye_basic_band_monthly', 3141.67),   // 37,700 / 12
+      higherBandMonthly: await g('paye_higher_band_monthly', 6238.33)   // 74,870 / 12 (50,270 -> 125,140)
+    },
+    nicEe: {
+      ptMonthly:  await g('nic_ee_pt_monthly', 1048),     // ≈ Primary Threshold
+      uelMonthly: await g('nic_ee_uel_monthly', 4189),    // ≈ UEL
+      rate1Pct:   await g('nic_ee_rate1_pct', 8),         // PT -> UEL
+      rate2Pct:   await g('nic_ee_rate2_pct', 2)          // above UEL
+    },
+    nicEr: {
+      stMonthly: await g('nic_er_st_monthly', 417),       // ≈ Secondary Threshold (2025/26 reduced)
+      ratePct:   await g('nic_er_rate_pct', 15)
+    }
+  };
+}
+function taxCodeScheme(code){
+  if (!code) return 'L';
+  code = String(code).toUpperCase().trim();
+  if (['BR','D0','D1','NT','0T'].includes(code)) return code;
+  return 'L';
+}
+function taxCodeAllowance(code){
+  if (!code) return 12570;
+  code = String(code).toUpperCase().trim();
+  if (code === 'NT') return Infinity;
+  if (['BR','D0','D1','0T'].includes(code)) return 0;
+  const m = code.match(/^(\d+)L$/);
+  if (m) return Number(m[1]) * 10;
+  return 12570;
+}
+function calcPAYE(taxableMonthly, taxCode, s){
+  const scheme = taxCodeScheme(taxCode);
+  if (scheme==='NT' || taxableMonthly<=0) return 0;
+  if (scheme==='BR') return toMoney(taxableMonthly * s.paye.basicPct/100);
+  if (scheme==='D0') return toMoney(taxableMonthly * s.paye.higherPct/100);
+  if (scheme==='D1') return toMoney(taxableMonthly * s.paye.additionalPct/100);
+  const allowance = scheme==='0T' ? 0 : taxCodeAllowance(taxCode)/12;
+  let taxable = Math.max(0, taxableMonthly - allowance);
+  let tax = 0;
+  if (taxable <= 0) return 0;
+  const inBasic = Math.min(taxable, s.paye.basicBandMonthly);
+  tax += inBasic * s.paye.basicPct/100; taxable -= inBasic;
+  if (taxable > 0){
+    const inHigher = Math.min(taxable, s.paye.higherBandMonthly);
+    tax += inHigher * s.paye.higherPct/100; taxable -= inHigher;
+  }
+  if (taxable > 0) tax += taxable * s.paye.additionalPct/100;
+  return toMoney(tax);
+}
+function calcNicEe(grossMonthly, s){
+  const pt = s.nicEe.ptMonthly, uel = s.nicEe.uelMonthly;
+  if (grossMonthly <= pt) return 0;
+  const inBand1 = Math.min(grossMonthly, uel) - pt;
+  const inBand2 = Math.max(0, grossMonthly - uel);
+  return toMoney(inBand1 * s.nicEe.rate1Pct/100 + inBand2 * s.nicEe.rate2Pct/100);
+}
+function calcNicEr(grossMonthly, s){
+  const st = s.nicEr.stMonthly;
+  if (grossMonthly <= st) return 0;
+  return toMoney((grossMonthly - st) * s.nicEr.ratePct/100);
+}
+// Build a fully calculated set of payslip lines for one employee
+async function buildCalculatedLines(emp, settings){
+  if (!settings) settings = await getPayrollSettings();
+  const basic     = toMoney((Number(emp.salary)||0)/12);
+  const carAll    = toMoney(Number(emp.car_allowance_monthly)||0);
+  const carSac    = toMoney(Number(emp.car_sacrifice_monthly)||0);
+  const penSacPct = Number(emp.pension_sacrifice_pct)||0;
+  const erPenPct  = Number(emp.employer_pension_pct)||0;
+  const penSac    = toMoney(basic * penSacPct/100);
+  const erPension = toMoney(basic * erPenPct/100);
+
+  const lines = [];
+  lines.push({ code:'basic_pay',     label:'Basic Pay',                  category:'payment',  units:1, rate:basic,  amount:basic });
+  if (carAll) lines.push({ code:'car_allowance', label:'Car Allowance', category:'payment',  units:1, rate:carAll, amount:carAll });
+  if (penSac) lines.push({ code:'pension_sacrifice', label:'Salary Sacrifice (Pension)', category:'payment', units:1, rate:-penSac, amount:-penSac });
+  if (carSac) lines.push({ code:'car_sacrifice',     label:'Salary Sacrifice (Car)',     category:'payment', units:1, rate:-carSac, amount:-carSac });
+
+  // Taxable / NI-able gross is the sum of payments (sacrifices net in as negatives)
+  const grossTaxable = toMoney(lines.filter(l=>l.category==='payment').reduce((a,l)=>a+l.amount,0));
+  const paye   = calcPAYE(grossTaxable, emp.tax_code||'1257L', settings);
+  const nicEe  = calcNicEe(grossTaxable, settings);
+  const nicEr  = calcNicEr(grossTaxable, settings);
+
+  lines.push({ code:'paye',        label:'PAYE',              category:'deduction', units:1, rate:paye,   amount:paye });
+  lines.push({ code:'nic_ee',      label:'Employees NIC',     category:'deduction', units:1, rate:nicEe,  amount:nicEe });
+  if (erPension) lines.push({ code:'pension_er', label:'Employers Pension', category:'other', units:1, rate:erPension, amount:erPension });
+  lines.push({ code:'ni_er',       label:'Employers NI',      category:'other',     units:1, rate:nicEr,  amount:nicEr });
+  return lines;
+}
+// Given a current set of payment lines, recompute PAYE / NIC / Employer NI / Employer pension based on the employee's settings.
+// Keeps payment lines as-is so manual overtime etc. is preserved.
+async function recomputeStatutoryLines(emp, payLines, settings){
+  if (!settings) settings = await getPayrollSettings();
+  const grossTaxable = toMoney(payLines.filter(l=>l.category==='payment').reduce((a,l)=>a+(Number(l.amount)||0),0));
+  const basic = (payLines.find(l=>l.code==='basic_pay')?.amount) || (Number(emp.salary)||0)/12;
+  const paye   = calcPAYE(grossTaxable, emp.tax_code||'1257L', settings);
+  const nicEe  = calcNicEe(grossTaxable, settings);
+  const nicEr  = calcNicEr(grossTaxable, settings);
+  const erPension = toMoney(Number(basic) * (Number(emp.employer_pension_pct)||0)/100);
+  // Strip existing statutory lines and re-add
+  const kept = payLines.filter(l => !['paye','nic_ee','ni_er','pension_er'].includes(l.code));
+  kept.push({ code:'paye',   label:'PAYE',          category:'deduction', units:1, rate:paye,  amount:paye });
+  kept.push({ code:'nic_ee', label:'Employees NIC', category:'deduction', units:1, rate:nicEe, amount:nicEe });
+  if (erPension) kept.push({ code:'pension_er', label:'Employers Pension', category:'other', units:1, rate:erPension, amount:erPension });
+  kept.push({ code:'ni_er', label:'Employers NI', category:'other', units:1, rate:nicEr, amount:nicEr });
+  return kept;
+}
+
 // ── Pay run create / generate drafts ──
 async function newPayRunForm(){
   const today6 = new Date(); const yyyy=today6.getFullYear(); const mm=String(today6.getMonth()+1).padStart(2,'0');
@@ -1763,17 +1905,10 @@ async function createPayRun(ev){
   if (existing){ toast('A pay run for that period already exists','error'); return; }
   const runId = uuid();
   await idbPut('pay_runs', { id:runId, period, pay_date:payDate, status:'draft', created_at:nowISO(), finalised_at:null, created_by:state.user.username });
-  const components = await payComponentsSorted();
+  const settings = await getPayrollSettings();
   const active = state.employees.filter(e=>e.status==='active');
   for (const e of active){
-    const lines = [];
-    components.forEach(c => {
-      if (!c.recurring) return;
-      let amount = c.default_amount || 0;
-      let units = 1, rate = amount;
-      if (c.computed==='monthly_salary'){ amount = toMoney((Number(e.salary)||0)/12); rate = amount; }
-      lines.push({ code:c.code, label:c.label, category:c.category, units, rate: toMoney(rate), amount: toMoney(amount) });
-    });
+    const lines = await buildCalculatedLines(e, settings);
     const t = payslipTotals(lines);
     await idbPut('payslips', { id:uuid(), pay_run_id:runId, employee_id:e.id, lines, gross_pay:t.gross, total_deductions:t.deductions, net_pay:t.net, employer_ni:t.employer_ni, employer_pension:t.employer_pension, tax_code_at_pay:e.tax_code||'', ni_number_at_pay:e.ni_number||'', personnel_number_at_pay:e.employee_number||'', created_at:nowISO(), updated_at:nowISO() });
   }
@@ -1907,7 +2042,22 @@ function renderPayslipEditor(){
       <div><div class="small muted">Deductions</div><div style="font-size:1.1rem;font-weight:700">${fmtPay(t.deductions)}</div></div>
       <div><div class="small muted">Net</div><div style="font-size:1.3rem;font-weight:700;color:var(--success)">${fmtPay(t.net)}</div></div>
     </div>
-    <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="button" class="btn btn-primary" onclick="savePayslipDraft()">Save changes</button></div>`, true);
+    <div class="modal-actions"><button type="button" class="btn btn-outline" style="margin-right:auto" onclick="resetPayslipFromDefaults()">Reset from employee defaults</button><button type="button" class="btn btn-warning" onclick="recalcPayslipStatutory()">Recalculate tax & NI</button><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="button" class="btn btn-primary" onclick="savePayslipDraft()">Save changes</button></div>`, true);
+}
+async function recalcPayslipStatutory(){
+  const p = window._payslipDraft; if (!p) return;
+  const emp = empById(p.employee_id); if (!emp){ toast('Employee not found','error'); return; }
+  p.lines = await recomputeStatutoryLines(emp, p.lines);
+  toast('PAYE / NIC / employer items recalculated');
+  renderPayslipEditor();
+}
+async function resetPayslipFromDefaults(){
+  const p = window._payslipDraft; if (!p) return;
+  if (!confirm('Replace all lines on this payslip with a fresh calculation from the employee\'s defaults (basic + allowances + tax/NI)?')) return;
+  const emp = empById(p.employee_id); if (!emp){ toast('Employee not found','error'); return; }
+  p.lines = await buildCalculatedLines(emp);
+  toast('Payslip rebuilt from employee defaults');
+  renderPayslipEditor();
 }
 function updatePayslipLine(idx, field, value, isAmount){
   const p = window._payslipDraft;
