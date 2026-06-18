@@ -1775,8 +1775,8 @@ async function getPayrollSettings(){
       basicPct:        await g('paye_basic_pct', 20),
       higherPct:       await g('paye_higher_pct', 40),
       additionalPct:   await g('paye_additional_pct', 45),
-      basicBandMonthly:  await g('paye_basic_band_monthly', 3141.67),   // 37,700 / 12
-      higherBandMonthly: await g('paye_higher_band_monthly', 6238.33)   // 74,870 / 12 (50,270 -> 125,140)
+      basicBandMonthly:  await g('paye_basic_band_monthly', 3141.67),   // 37,700 / 12 (20% band size, taxable)
+      higherBandMonthly: await g('paye_higher_band_monthly', 7286.67)   // 87,440 / 12 (40% band size, taxable; 125,140 - 37,700)
     },
     nicEe: {
       ptMonthly:  await g('nic_ee_pt_monthly', 1048),     // ≈ Primary Threshold
@@ -1794,15 +1794,21 @@ function taxCodeScheme(code){
   if (!code) return 'L';
   code = String(code).toUpperCase().trim();
   if (['BR','D0','D1','NT','0T'].includes(code)) return code;
+  if (/^K\d+$/.test(code)) return 'K';
   return 'L';
 }
+// Returns the annual tax-free allowance for the code. K codes return a NEGATIVE number
+// (e.g. K175 → -£1,750) because the K-code number ADDS to taxable income rather than
+// reducing it.
 function taxCodeAllowance(code){
   if (!code) return 12570;
   code = String(code).toUpperCase().trim();
   if (code === 'NT') return Infinity;
   if (['BR','D0','D1','0T'].includes(code)) return 0;
-  const m = code.match(/^(\d+)L$/);
-  if (m) return Number(m[1]) * 10;
+  const mL = code.match(/^(\d+)L$/);
+  if (mL) return Number(mL[1]) * 10;
+  const mK = code.match(/^K(\d+)$/);
+  if (mK) return -Number(mK[1]) * 10; // negative allowance for K codes
   return 12570;
 }
 function calcPAYE(taxableMonthly, taxCode, s){
@@ -1811,10 +1817,12 @@ function calcPAYE(taxableMonthly, taxCode, s){
   if (scheme==='BR') return toMoney(taxableMonthly * s.paye.basicPct/100);
   if (scheme==='D0') return toMoney(taxableMonthly * s.paye.higherPct/100);
   if (scheme==='D1') return toMoney(taxableMonthly * s.paye.additionalPct/100);
-  const allowance = scheme==='0T' ? 0 : taxCodeAllowance(taxCode)/12;
-  let taxable = Math.max(0, taxableMonthly - allowance);
-  let tax = 0;
+  // L, K and 0T all go through the banded calculation; K codes contribute a
+  // negative monthly allowance, which pushes more income into the taxable bands.
+  const monthlyAllowance = (scheme==='0T') ? 0 : taxCodeAllowance(taxCode)/12;
+  let taxable = taxableMonthly - monthlyAllowance; // K: subtracting a negative => higher taxable
   if (taxable <= 0) return 0;
+  let tax = 0;
   const inBasic = Math.min(taxable, s.paye.basicBandMonthly);
   tax += inBasic * s.paye.basicPct/100; taxable -= inBasic;
   if (taxable > 0){
@@ -1822,6 +1830,11 @@ function calcPAYE(taxableMonthly, taxCode, s){
     tax += inHigher * s.paye.higherPct/100; taxable -= inHigher;
   }
   if (taxable > 0) tax += taxable * s.paye.additionalPct/100;
+  // HMRC regulatory cap: PAYE on a K-code payslip cannot exceed 50% of the gross pay for the period.
+  if (scheme==='K'){
+    const cap = taxableMonthly * 0.5;
+    if (tax > cap) tax = cap;
+  }
   return toMoney(tax);
 }
 function calcNicEe(grossMonthly, s){
