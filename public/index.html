@@ -393,7 +393,7 @@ async function seedDefaults(){
   const mgrId = uuid(), empId = uuid(), e3 = uuid(), e4 = uuid(), e5 = uuid();
   const mk = (id, o) => ({
     id, title:o.ttl||'', employee_number:o.num, first_name:o.fn, last_name:o.ln, preferred_name:'',
-    date_of_birth:o.dob, gender:o.g||'', ni_number:o.ni, tax_code:o.tax||'1257L',
+    date_of_birth:o.dob, gender:o.g||'', ni_number:o.ni, tax_code:o.tax||'1257L', tax_code_m1: o.m1===true,
     address_line1:o.a1||'', address_line2:'', city:o.city||'', postcode:o.pc||'',
     personal_email:o.pe||'', work_email:o.we, mobile_phone:o.mob||'', home_phone:'',
     job_title:o.jt, department:o.dept, site:o.site, manager_id:o.mgr||null,
@@ -949,8 +949,12 @@ function refreshEmpTab(){
   if (tab && el && document.getElementById('emp-tab-body')){ empTab(tab, el); return true; }
   return false;
 }
-function empTabPersonal(body, id){
+async function empTabPersonal(body, id){
   const e = empById(id);
+  const canEdit = state.user.role==='hr_admin';
+  // tax code change history from audit_log
+  const audit = await idbGetAll('audit_log');
+  const history = audit.filter(a => a.action==='tax_code_change' && a.employee_id===id).sort((a,b)=>(b.timestamp||'').localeCompare(a.timestamp||''));
   body.innerHTML = `<div class="card"><dl class="kv">
     <dt>Title</dt><dd>${esc(e.title)||'—'}</dd>
     <dt>Full name</dt><dd>${esc(e.first_name)} ${esc(e.last_name)}</dd>
@@ -958,13 +962,52 @@ function empTabPersonal(body, id){
     <dt>Date of birth</dt><dd>${fmtDate(e.date_of_birth)}</dd>
     <dt>Gender</dt><dd>${esc(e.gender)||'—'}</dd>
     <dt>NI number</dt><dd>${esc(e.ni_number)||'—'}</dd>
-    <dt>Tax code</dt><dd>${esc(e.tax_code)||'—'}</dd>
+    <dt>Tax code</dt><dd>${esc(e.tax_code)||'—'}${e.tax_code_m1?' <span class="badge b-amber">M1 / non-cumulative</span>':''}${canEdit?` <button class="btn btn-outline btn-sm" style="margin-left:8px" onclick="taxCodeChangeForm('${id}')">Change…</button>`:''}</dd>
     <dt>Address</dt><dd>${[e.address_line1,e.address_line2,e.city,e.postcode].filter(Boolean).map(esc).join(', ')||'—'}</dd>
     <dt>Mobile</dt><dd>${esc(e.mobile_phone)||'—'}</dd>
     <dt>Home phone</dt><dd>${esc(e.home_phone)||'—'}</dd>
     <dt>Personal email</dt><dd>${esc(e.personal_email)||'—'}</dd>
     <dt>Work email</dt><dd>${esc(e.work_email)||'—'}</dd>
-  </dl></div>`;
+  </dl></div>
+  <div class="card"><div class="card-head"><h3>Tax code history</h3></div>
+    ${history.length?`<div class="table-wrap"><table><thead><tr><th>Changed</th><th>From</th><th>To</th><th>Basis</th><th>Effective</th><th>By</th><th>Reason</th></tr></thead><tbody>${
+      history.map(h=>{ const d=h.details||{}; return `<tr><td>${fmtDate(h.timestamp)}</td><td>${esc(d.from)||'—'}</td><td><strong>${esc(d.to)}</strong></td><td>${d.m1?'<span class="badge b-amber">M1</span>':'Cumulative'}</td><td>${fmtDate(d.effective_date)}</td><td>${esc(h.user)||'—'}</td><td class="small">${esc(d.reason)||'—'}</td></tr>`; }).join('')
+    }</tbody></table></div>`:'<div class="empty small">No recorded tax code changes.</div>'}
+  </div>`;
+}
+// Modal: change tax code (logged to audit_log)
+function taxCodeChangeForm(empId){
+  const e = empById(empId); if (!e) return;
+  openModal(`<h2>Change tax code</h2><div class="modal-sub">${esc(e.first_name+' '+e.last_name)}</div>
+    <form onsubmit="saveTaxCodeChange(event,'${empId}')">
+      <div class="form-row">
+        <div class="form-group"><label>Current tax code</label><input value="${esc(e.tax_code||'')}" disabled style="opacity:.6"></div>
+        <div class="form-group"><label class="req">New tax code</label><input id="tc-new" value="${esc(e.tax_code||'')}" required placeholder="e.g. 1257L, K175, BR"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Basis</label><select id="tc-m1"><option value="false" ${!e.tax_code_m1?'selected':''}>Cumulative (standard)</option><option value="true" ${e.tax_code_m1?'selected':''}>Month 1 / Week 1 (non-cumulative)</option></select></div>
+        <div class="form-group"><label>Effective date</label><input id="tc-date" type="date" value="${today()}"></div>
+      </div>
+      <div class="form-group"><label>Reason / notes (optional)</label><input id="tc-reason" placeholder="e.g. P6 notice from HMRC"></div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save change</button></div>
+    </form>`);
+}
+async function saveTaxCodeChange(ev, empId){
+  ev.preventDefault();
+  const e = empById(empId); if (!e) return;
+  const fromCode = e.tax_code || '';
+  const fromM1 = !!e.tax_code_m1;
+  const toCode = val('tc-new');
+  const toM1 = val('tc-m1')==='true';
+  if (toCode === fromCode && toM1 === fromM1){ toast('No change','info'); return; }
+  e.tax_code = toCode;
+  e.tax_code_m1 = toM1;
+  e.updated_at = nowISO();
+  await idbPut('employees', e);
+  await idbAdd('audit_log', { timestamp: nowISO(), user: state.user.username, action: 'tax_code_change', employee_id: empId, details: { from: fromCode, to: toCode, m1: toM1, effective_date: val('tc-date'), reason: val('tc-reason') } });
+  await refreshCaches();
+  closeModal(); toast('Tax code updated');
+  refreshEmpTab();
 }
 function empTabEmployment(body, id){
   const e = empById(id);
@@ -1097,7 +1140,7 @@ function employeeForm(id){
         </div>
         <div class="form-row">
           <div class="form-group"><label>Tax code</label><input id="f-tax" value="${esc(e.tax_code||'')}" placeholder="1257L"></div>
-          <div class="form-group"></div>
+          <div class="form-group"><label>Tax basis</label><select id="f-tax-m1"><option value="false" ${!e.tax_code_m1?'selected':''}>Cumulative (standard)</option><option value="true" ${e.tax_code_m1?'selected':''}>Month 1 / Week 1 (non-cumulative)</option></select><div class="small muted">M1 calculates each period independently; cumulative uses YTD.</div></div>
         </div>
         <div class="form-group"><label>Address line 1</label><input id="f-a1" value="${esc(e.address_line1||'')}"></div>
         <div class="form-row-3">
@@ -1170,7 +1213,7 @@ async function saveEmployee(ev, id){
     title: val('f-title'),
     employee_number: val('f-num'), first_name: val('f-fn'), last_name: val('f-ln'),
     preferred_name: existing?.preferred_name||'',
-    date_of_birth: val('f-dob'), gender: val('f-gender'), ni_number: val('f-ni'), tax_code: val('f-tax'),
+    date_of_birth: val('f-dob'), gender: val('f-gender'), ni_number: val('f-ni'), tax_code: val('f-tax'), tax_code_m1: val('f-tax-m1')==='true',
     address_line1: val('f-a1'), address_line2: val('f-a2'), city: val('f-city'), postcode: val('f-pc'),
     personal_email: val('f-pe'), work_email: val('f-we'), mobile_phone: val('f-mob'), home_phone: existing?.home_phone||'',
     job_title: val('f-jt'), department: val('f-dept'), site: val('f-site'),
@@ -1685,28 +1728,60 @@ async function deleteTask(id){ if(!confirm('Delete this task?'))return; await id
 // ═══════════════════════════════════════════════
 // PAYROLL
 // ═══════════════════════════════════════════════
+// value_type:
+//   'fixed'              → default_amount is a £ figure (e.g. First Aid £15)
+//   'hourly_multiplier'  → default_amount is a multiplier (1.0/1.5/2.0); line rate
+//                          auto-calcs as hourly_rate × multiplier
+//   'employee_linked'    → value pulled from an employee field (no global default)
+//   'calculated'         → computed by the payroll engine (no global default)
 const DEFAULT_PAY_COMPONENTS = [
-  { code:'basic_pay',         label:'Basic Pay',                  category:'payment',   recurring:true,  default_amount:0,  display_order:10, enabled:true, computed:'monthly_salary', system:true },
-  { code:'car_allowance',     label:'Car Allowance',              category:'payment',   recurring:true,  default_amount:0,  display_order:15, enabled:true, system:true },
-  { code:'ot_x1',             label:'Overtime x1',                category:'payment',   recurring:false, default_amount:0,  display_order:20, enabled:true, hourly:true, system:true },
-  { code:'ot_x1_5',           label:'Overtime x1.5',              category:'payment',   recurring:false, default_amount:0,  display_order:21, enabled:true, hourly:true, system:true },
-  { code:'ot_x2',             label:'Overtime x2',                category:'payment',   recurring:false, default_amount:0,  display_order:22, enabled:true, hourly:true, system:true },
-  { code:'first_aid',         label:'First Aid',                  category:'payment',   recurring:false, default_amount:15, display_order:30, enabled:true, system:true },
-  { code:'hse',               label:'HSE',                        category:'payment',   recurring:false, default_amount:15, display_order:31, enabled:true, system:true },
-  { code:'fire_marshal',      label:'Fire Marshal',               category:'payment',   recurring:false, default_amount:15, display_order:32, enabled:true, system:true },
-  { code:'pension_sacrifice', label:'Salary Sacrifice (Pension)', category:'payment',   recurring:false, default_amount:0,  display_order:40, enabled:true, system:true },
-  { code:'car_sacrifice',     label:'Salary Sacrifice (Car)',     category:'payment',   recurring:false, default_amount:0,  display_order:41, enabled:true, system:true },
-  { code:'paye',              label:'PAYE',                       category:'deduction', recurring:false, default_amount:0,  display_order:50, enabled:true, system:true },
-  { code:'nic_ee',            label:"Employees NIC",              category:'deduction', recurring:false, default_amount:0,  display_order:51, enabled:true, system:true },
-  { code:'pension_er',        label:'Employers Pension',          category:'other',     recurring:false, default_amount:0,  display_order:60, enabled:true, system:true },
-  { code:'ni_er',             label:'Employers NI',               category:'other',     recurring:false, default_amount:0,  display_order:61, enabled:true, system:true }
+  { code:'basic_pay',         label:'Basic Pay',                  category:'payment',   recurring:true,  default_amount:0,  display_order:10, enabled:true, value_type:'employee_linked', linked_field:'salary_monthly',          system:true },
+  { code:'car_allowance',     label:'Car Allowance',              category:'payment',   recurring:true,  default_amount:0,  display_order:15, enabled:true, value_type:'employee_linked', linked_field:'car_allowance_monthly',   system:true },
+  { code:'ot_x1',             label:'Overtime x1',                category:'payment',   recurring:false, default_amount:1.0,display_order:20, enabled:true, value_type:'hourly_multiplier', system:true },
+  { code:'ot_x1_5',           label:'Overtime x1.5',              category:'payment',   recurring:false, default_amount:1.5,display_order:21, enabled:true, value_type:'hourly_multiplier', system:true },
+  { code:'ot_x2',             label:'Overtime x2',                category:'payment',   recurring:false, default_amount:2.0,display_order:22, enabled:true, value_type:'hourly_multiplier', system:true },
+  { code:'first_aid',         label:'First Aid',                  category:'payment',   recurring:false, default_amount:15, display_order:30, enabled:true, value_type:'fixed', system:true },
+  { code:'hse',               label:'HSE',                        category:'payment',   recurring:false, default_amount:15, display_order:31, enabled:true, value_type:'fixed', system:true },
+  { code:'fire_marshal',      label:'Fire Marshal',               category:'payment',   recurring:false, default_amount:15, display_order:32, enabled:true, value_type:'fixed', system:true },
+  { code:'pension_sacrifice', label:'Salary Sacrifice (Pension)', category:'payment',   recurring:false, default_amount:0,  display_order:40, enabled:true, value_type:'calculated', system:true },
+  { code:'car_sacrifice',     label:'Salary Sacrifice (Car)',     category:'payment',   recurring:false, default_amount:0,  display_order:41, enabled:true, value_type:'employee_linked', linked_field:'car_sacrifice_monthly', system:true },
+  { code:'paye',              label:'PAYE',                       category:'deduction', recurring:false, default_amount:0,  display_order:50, enabled:true, value_type:'calculated', system:true },
+  { code:'nic_ee',            label:"Employees NIC",              category:'deduction', recurring:false, default_amount:0,  display_order:51, enabled:true, value_type:'calculated', system:true },
+  { code:'pension_er',        label:'Employers Pension',          category:'other',     recurring:false, default_amount:0,  display_order:60, enabled:true, value_type:'calculated', system:true },
+  { code:'ni_er',             label:'Employers NI',               category:'other',     recurring:false, default_amount:0,  display_order:61, enabled:true, value_type:'calculated', system:true }
 ];
+const LOCKED_CODES = ['paye','nic_ee','ni_er','pension_sacrifice','pension_er'];
+function isLockedComponent(code){ return LOCKED_CODES.includes(code); }
+function isHourlyMultiplierCode(code){ return ['ot_x1','ot_x1_5','ot_x2'].includes(code); }
 async function seedPayComponentsIfEmpty(){
   const existing = await idbGetAll('pay_components');
   if (existing.length) return;
   for (const c of DEFAULT_PAY_COMPONENTS){
     await idbPut('pay_components', { id: uuid(), ...c });
   }
+}
+// Backfill value_type / linked_field onto pay components seeded by earlier versions.
+async function migratePayComponents(){
+  const existing = await idbGetAll('pay_components');
+  for (const c of existing){
+    const def = DEFAULT_PAY_COMPONENTS.find(d => d.code === c.code);
+    if (!def) continue;
+    let changed = false;
+    if (!c.value_type){ c.value_type = def.value_type; changed = true; }
+    if (def.linked_field && c.linked_field !== def.linked_field){ c.linked_field = def.linked_field; changed = true; }
+    // Backfill OT multipliers when they were seeded as 0 under the old schema
+    if (def.value_type === 'hourly_multiplier' && (!c.default_amount || c.default_amount === 0)){
+      c.default_amount = def.default_amount; changed = true;
+    }
+    if (changed) await idbPut('pay_components', c);
+  }
+}
+// Hourly rate = annual salary / (52 × weekly hours)
+function getHourlyRate(emp){
+  const annual = Number(emp?.salary) || 0;
+  const hours = Number(emp?.working_hours) || 37.5;
+  if (!hours) return 0;
+  return annual / (52 * hours);
 }
 // UK tax year: 6 April – 5 April. Override via setting 'tax_year_start' (MM-DD).
 async function taxYearBounds(ref){
@@ -1811,31 +1886,78 @@ function taxCodeAllowance(code){
   if (mK) return -Number(mK[1]) * 10; // negative allowance for K codes
   return 12570;
 }
-function calcPAYE(taxableMonthly, taxCode, s){
+// Calculate PAYE for one pay period.
+//   taxableMonthly — this period's taxable pay (after sacrifices net in)
+//   taxCode        — string e.g. '1257L', 'K175', 'BR'
+//   s              — payroll settings (bands/rates)
+//   ctx            — { m1: boolean, periodNumber: 1..12, priorGross: £, priorPaye: £ }
+//                    Defaults to M1 if omitted.
+function calcPAYE(taxableMonthly, taxCode, s, ctx){
+  const m1 = ctx?.m1 !== false ? (ctx?.m1 ?? true) : false;
   const scheme = taxCodeScheme(taxCode);
   if (scheme==='NT' || taxableMonthly<=0) return 0;
   if (scheme==='BR') return toMoney(taxableMonthly * s.paye.basicPct/100);
   if (scheme==='D0') return toMoney(taxableMonthly * s.paye.higherPct/100);
   if (scheme==='D1') return toMoney(taxableMonthly * s.paye.additionalPct/100);
-  // L, K and 0T all go through the banded calculation; K codes contribute a
-  // negative monthly allowance, which pushes more income into the taxable bands.
+
+  // L / K / 0T all use the banded calculation. K-code gives a NEGATIVE monthly
+  // allowance, which adds to taxable income; 0T uses zero allowance.
   const monthlyAllowance = (scheme==='0T') ? 0 : taxCodeAllowance(taxCode)/12;
-  let taxable = taxableMonthly - monthlyAllowance; // K: subtracting a negative => higher taxable
-  if (taxable <= 0) return 0;
+
   let tax = 0;
-  const inBasic = Math.min(taxable, s.paye.basicBandMonthly);
-  tax += inBasic * s.paye.basicPct/100; taxable -= inBasic;
-  if (taxable > 0){
-    const inHigher = Math.min(taxable, s.paye.higherBandMonthly);
-    tax += inHigher * s.paye.higherPct/100; taxable -= inHigher;
+  if (m1){
+    let taxable = taxableMonthly - monthlyAllowance;
+    if (taxable <= 0) return 0;
+    const inBasic = Math.min(taxable, s.paye.basicBandMonthly);
+    tax += inBasic * s.paye.basicPct/100; taxable -= inBasic;
+    if (taxable > 0){
+      const inHigher = Math.min(taxable, s.paye.higherBandMonthly);
+      tax += inHigher * s.paye.higherPct/100; taxable -= inHigher;
+    }
+    if (taxable > 0) tax += taxable * s.paye.additionalPct/100;
+  } else {
+    // Cumulative: this period's tax = cumulative tax due to date - tax already paid YTD.
+    const periodNumber = ctx?.periodNumber || 1;
+    const priorGross = Number(ctx?.priorGross) || 0;
+    const priorPaye  = Number(ctx?.priorPaye)  || 0;
+    const cumGross = priorGross + taxableMonthly;
+    const cumAllowance = monthlyAllowance * periodNumber;
+    let taxable = cumGross - cumAllowance;
+    let cumTax = 0;
+    if (taxable > 0){
+      const basicYTD  = s.paye.basicBandMonthly  * periodNumber;
+      const higherYTD = s.paye.higherBandMonthly * periodNumber;
+      const inBasic = Math.min(taxable, basicYTD);
+      cumTax += inBasic * s.paye.basicPct/100; taxable -= inBasic;
+      if (taxable > 0){
+        const inHigher = Math.min(taxable, higherYTD);
+        cumTax += inHigher * s.paye.higherPct/100; taxable -= inHigher;
+      }
+      if (taxable > 0) cumTax += taxable * s.paye.additionalPct/100;
+    }
+    tax = cumTax - priorPaye;
+    if (tax < 0) tax = 0; // We don't refund through PAYE in this simplified model.
   }
-  if (taxable > 0) tax += taxable * s.paye.additionalPct/100;
-  // HMRC regulatory cap: PAYE on a K-code payslip cannot exceed 50% of the gross pay for the period.
+  // HMRC K-code regulatory cap: PAYE cannot exceed 50% of this period's gross pay.
   if (scheme==='K'){
     const cap = taxableMonthly * 0.5;
     if (tax > cap) tax = cap;
   }
   return toMoney(tax);
+}
+// YTD context for cumulative PAYE: how much gross/PAYE has the employee already
+// paid in this tax year, BEFORE the given period (period is 'YYYY-MM').
+async function getYtdContext(employeeId, currentPeriod){
+  const bounds = await taxYearBounds(currentPeriod+'-01');
+  const runs = await idbGetAll('pay_runs');
+  const priorRuns = runs.filter(r => r.status==='finalised'
+    && r.pay_date>=bounds.start && r.pay_date<=bounds.end
+    && (r.period||'') < currentPeriod);
+  const priorIds = new Set(priorRuns.map(r=>r.id));
+  const slips = (await idbByIndex('payslips','employee_id',employeeId)).filter(p => priorIds.has(p.pay_run_id));
+  const priorGross = slips.reduce((a,p)=>a+(Number(p.gross_pay)||0), 0);
+  const priorPaye  = slips.reduce((a,p)=>{ const l=(p.lines||[]).find(x=>x.code==='paye'); return a + (Number(l?.amount)||0); }, 0);
+  return { periodNumber: periodMonthNumber(currentPeriod), priorGross: toMoney(priorGross), priorPaye: toMoney(priorPaye) };
 }
 function calcNicEe(grossMonthly, s){
   const pt = s.nicEe.ptMonthly, uel = s.nicEe.uelMonthly;
@@ -1849,8 +1971,9 @@ function calcNicEr(grossMonthly, s){
   if (grossMonthly <= st) return 0;
   return toMoney((grossMonthly - st) * s.nicEr.ratePct/100);
 }
-// Build a fully calculated set of payslip lines for one employee
-async function buildCalculatedLines(emp, settings){
+// Build a fully calculated set of payslip lines for one employee.
+// ctx is the PAYE context (M1 flag + YTD priors). Pass undefined for default M1.
+async function buildCalculatedLines(emp, settings, ctx){
   if (!settings) settings = await getPayrollSettings();
   const basic     = toMoney((Number(emp.salary)||0)/12);
   const carAll    = toMoney(Number(emp.car_allowance_monthly)||0);
@@ -1866,9 +1989,9 @@ async function buildCalculatedLines(emp, settings){
   if (penSac) lines.push({ code:'pension_sacrifice', label:'Salary Sacrifice (Pension)', category:'payment', units:1, rate:-penSac, amount:-penSac });
   if (carSac) lines.push({ code:'car_sacrifice',     label:'Salary Sacrifice (Car)',     category:'payment', units:1, rate:-carSac, amount:-carSac });
 
-  // Taxable / NI-able gross is the sum of payments (sacrifices net in as negatives)
   const grossTaxable = toMoney(lines.filter(l=>l.category==='payment').reduce((a,l)=>a+l.amount,0));
-  const paye   = calcPAYE(grossTaxable, emp.tax_code||'1257L', settings);
+  const payeCtx = ctx || { m1: !!emp.tax_code_m1 };
+  const paye   = calcPAYE(grossTaxable, emp.tax_code||'1257L', settings, payeCtx);
   const nicEe  = calcNicEe(grossTaxable, settings);
   const nicEr  = calcNicEr(grossTaxable, settings);
 
@@ -1878,21 +2001,26 @@ async function buildCalculatedLines(emp, settings){
   lines.push({ code:'ni_er',       label:'Employers NI',      category:'other',     units:1, rate:nicEr,  amount:nicEr });
   return lines;
 }
-// Given a current set of payment lines, recompute PAYE / NIC / Employer NI / Employer pension based on the employee's settings.
-// Keeps payment lines as-is so manual overtime etc. is preserved.
-async function recomputeStatutoryLines(emp, payLines, settings){
+// Recompute the locked / calculated lines (pension sacrifice, PAYE, NIC, employer
+// items) based on the current payment lines. Manual one-offs (overtime, first aid,
+// etc.) are preserved.
+async function recomputeStatutoryLines(emp, payLines, settings, ctx){
   if (!settings) settings = await getPayrollSettings();
-  const grossTaxable = toMoney(payLines.filter(l=>l.category==='payment').reduce((a,l)=>a+(Number(l.amount)||0),0));
-  const basic = (payLines.find(l=>l.code==='basic_pay')?.amount) || (Number(emp.salary)||0)/12;
-  const paye   = calcPAYE(grossTaxable, emp.tax_code||'1257L', settings);
+  const basicLine = payLines.find(l=>l.code==='basic_pay');
+  const basic = (basicLine?.amount != null) ? Number(basicLine.amount) : ((Number(emp.salary)||0)/12);
+  const penSac = toMoney(basic * (Number(emp.pension_sacrifice_pct)||0)/100);
+  const erPension = toMoney(basic * (Number(emp.employer_pension_pct)||0)/100);
+  // Strip every line we will recompute, keep user-edited payments untouched.
+  const kept = payLines.filter(l => !['paye','nic_ee','ni_er','pension_er','pension_sacrifice'].includes(l.code));
+  if (penSac > 0) kept.push({ code:'pension_sacrifice', label:'Salary Sacrifice (Pension)', category:'payment', units:1, rate:-penSac, amount:-penSac });
+  const grossTaxable = toMoney(kept.filter(l => l.category==='payment').reduce((a,l)=>a+(Number(l.amount)||0), 0));
+  const payeCtx = ctx || { m1: !!emp.tax_code_m1 };
+  const paye   = calcPAYE(grossTaxable, emp.tax_code||'1257L', settings, payeCtx);
   const nicEe  = calcNicEe(grossTaxable, settings);
   const nicEr  = calcNicEr(grossTaxable, settings);
-  const erPension = toMoney(Number(basic) * (Number(emp.employer_pension_pct)||0)/100);
-  // Strip existing statutory lines and re-add
-  const kept = payLines.filter(l => !['paye','nic_ee','ni_er','pension_er'].includes(l.code));
   kept.push({ code:'paye',   label:'PAYE',          category:'deduction', units:1, rate:paye,  amount:paye });
   kept.push({ code:'nic_ee', label:'Employees NIC', category:'deduction', units:1, rate:nicEe, amount:nicEe });
-  if (erPension) kept.push({ code:'pension_er', label:'Employers Pension', category:'other', units:1, rate:erPension, amount:erPension });
+  if (erPension > 0) kept.push({ code:'pension_er', label:'Employers Pension', category:'other', units:1, rate:erPension, amount:erPension });
   kept.push({ code:'ni_er', label:'Employers NI', category:'other', units:1, rate:nicEr, amount:nicEr });
   return kept;
 }
@@ -1921,9 +2049,11 @@ async function createPayRun(ev){
   const settings = await getPayrollSettings();
   const active = state.employees.filter(e=>e.status==='active');
   for (const e of active){
-    const lines = await buildCalculatedLines(e, settings);
+    const ctx = { m1: !!e.tax_code_m1 };
+    if (!ctx.m1){ Object.assign(ctx, await getYtdContext(e.id, period)); }
+    const lines = await buildCalculatedLines(e, settings, ctx);
     const t = payslipTotals(lines);
-    await idbPut('payslips', { id:uuid(), pay_run_id:runId, employee_id:e.id, lines, gross_pay:t.gross, total_deductions:t.deductions, net_pay:t.net, employer_ni:t.employer_ni, employer_pension:t.employer_pension, tax_code_at_pay:e.tax_code||'', ni_number_at_pay:e.ni_number||'', personnel_number_at_pay:e.employee_number||'', created_at:nowISO(), updated_at:nowISO() });
+    await idbPut('payslips', { id:uuid(), pay_run_id:runId, employee_id:e.id, lines, gross_pay:t.gross, total_deductions:t.deductions, net_pay:t.net, employer_ni:t.employer_ni, employer_pension:t.employer_pension, tax_code_at_pay:e.tax_code||'', tax_basis_at_pay:(e.tax_code_m1?'M1':'Cumulative'), ni_number_at_pay:e.ni_number||'', personnel_number_at_pay:e.employee_number||'', created_at:nowISO(), updated_at:nowISO() });
   }
   await logAction('pay_run_create', { period, run_id:runId });
   closeModal(); toast('Draft pay run created');
@@ -2029,14 +2159,21 @@ function renderPayslipEditor(){
   const e = empById(p.employee_id);
   const lineRow = (l, idx) => {
     const c = components.find(x=>x.code===l.code);
-    const isHourly = c?.hourly;
+    const vt = c?.value_type || 'fixed';
+    const locked = isLockedComponent(l.code);
+    const hourly = vt === 'hourly_multiplier';
+    const lockedStyle = ' style="opacity:.55;cursor:not-allowed;background:#f4f6f7" readonly';
+    const unitsAttr = locked ? lockedStyle : '';
+    const rateAttr  = (locked || hourly) ? lockedStyle : '';
+    const amountAttr = locked ? lockedStyle : '';
+    const lock = locked ? ' 🔒' : (hourly ? ' <span class="small muted" title="Rate auto = hourly × multiplier">auto-rate</span>' : '');
     return `<tr data-idx="${idx}">
       <td><span class="badge ${l.category==='payment'?'b-blue':(l.category==='deduction'?'b-red':'b-grey')}">${l.category}</span></td>
-      <td>${esc(l.label)}</td>
-      <td><input type="number" step="0.01" value="${l.units??1}" oninput="updatePayslipLine(${idx},'units',this.value)" style="width:80px"></td>
-      <td><input type="number" step="0.01" value="${l.rate??0}" oninput="updatePayslipLine(${idx},'rate',this.value)" style="width:100px"></td>
-      <td><input type="number" step="0.01" value="${l.amount??0}" oninput="updatePayslipLine(${idx},'amount',this.value,true)" style="width:110px"></td>
-      <td><button type="button" class="btn btn-danger btn-sm" onclick="removePayslipLine(${idx})">×</button></td>
+      <td>${esc(l.label)}${lock}</td>
+      <td><input type="number" step="0.01" value="${l.units??1}" oninput="updatePayslipLine(${idx},'units',this.value)"${unitsAttr} style="width:80px"></td>
+      <td><input type="number" step="0.01" value="${l.rate??0}" oninput="updatePayslipLine(${idx},'rate',this.value)"${rateAttr} style="width:100px"></td>
+      <td><input type="number" step="0.01" value="${l.amount??0}" oninput="updatePayslipLine(${idx},'amount',this.value,true)"${amountAttr} style="width:110px"></td>
+      <td>${locked?'':`<button type="button" class="btn btn-danger btn-sm" onclick="removePayslipLine(${idx})">×</button>`}</td>
     </tr>`;
   };
   const addOptions = components.map(c=>`<option value="${c.code}">${esc(c.label)} (${c.category})</option>`).join('');
@@ -2055,12 +2192,50 @@ function renderPayslipEditor(){
       <div><div class="small muted">Deductions</div><div style="font-size:1.1rem;font-weight:700">${fmtPay(t.deductions)}</div></div>
       <div><div class="small muted">Net</div><div style="font-size:1.3rem;font-weight:700;color:var(--success)">${fmtPay(t.net)}</div></div>
     </div>
-    <div class="modal-actions"><button type="button" class="btn btn-outline" style="margin-right:auto" onclick="resetPayslipFromDefaults()">Reset from employee defaults</button><button type="button" class="btn btn-warning" onclick="recalcPayslipStatutory()">Recalculate tax & NI</button><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="button" class="btn btn-primary" onclick="savePayslipDraft()">Save changes</button></div>`, true);
+    <div class="modal-actions">
+      <div style="display:flex;gap:8px;margin-right:auto">
+        <button type="button" class="btn btn-outline" onclick="payslipPrev()">← Prev</button>
+        <button type="button" class="btn btn-outline" onclick="payslipNext()">Next →</button>
+      </div>
+      <button type="button" class="btn btn-outline" onclick="resetPayslipFromDefaults()">Reset from defaults</button>
+      <button type="button" class="btn btn-warning" onclick="recalcPayslipStatutory()">Recalculate tax & NI</button>
+      <button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button type="button" class="btn btn-primary" onclick="savePayslipDraft()">Save changes</button>
+    </div>`, true);
+}
+// Save current draft, then open the previous/next payslip in the same pay run (sorted by last name).
+async function payslipNeighbour(direction){
+  const p = window._payslipDraft;
+  if (!p) return;
+  // save current
+  const t = payslipTotals(p.lines);
+  p.gross_pay = t.gross; p.total_deductions = t.deductions; p.net_pay = t.net; p.employer_ni = t.employer_ni; p.employer_pension = t.employer_pension; p.updated_at = nowISO();
+  await idbPut('payslips', p);
+  // load siblings in same run, sorted by last name
+  const slips = (await idbByIndex('payslips','pay_run_id', p.pay_run_id))
+    .sort((a,b)=>{ const ae=empById(a.employee_id), be=empById(b.employee_id); return (ae?.last_name||'').localeCompare(be?.last_name||''); });
+  const idx = slips.findIndex(x=>x.id===p.id);
+  const target = direction==='next' ? slips[idx+1] : slips[idx-1];
+  if (!target){ toast(direction==='next'?'No next payslip':'No previous payslip','info'); return; }
+  // open the next/prev one (replace the modal contents)
+  closeModal();
+  await editPayslip(target.id);
+}
+function payslipNext(){ payslipNeighbour('next'); }
+function payslipPrev(){ payslipNeighbour('prev'); }
+async function buildPayrollContextFor(emp, payRunId){
+  const ctx = { m1: !!emp.tax_code_m1 };
+  if (!ctx.m1 && payRunId){
+    const run = await idbGet('pay_runs', payRunId);
+    if (run?.period) Object.assign(ctx, await getYtdContext(emp.id, run.period));
+  }
+  return ctx;
 }
 async function recalcPayslipStatutory(){
   const p = window._payslipDraft; if (!p) return;
   const emp = empById(p.employee_id); if (!emp){ toast('Employee not found','error'); return; }
-  p.lines = await recomputeStatutoryLines(emp, p.lines);
+  const ctx = await buildPayrollContextFor(emp, p.pay_run_id);
+  p.lines = await recomputeStatutoryLines(emp, p.lines, undefined, ctx);
   toast('PAYE / NIC / employer items recalculated');
   renderPayslipEditor();
 }
@@ -2068,13 +2243,18 @@ async function resetPayslipFromDefaults(){
   const p = window._payslipDraft; if (!p) return;
   if (!confirm('Replace all lines on this payslip with a fresh calculation from the employee\'s defaults (basic + allowances + tax/NI)?')) return;
   const emp = empById(p.employee_id); if (!emp){ toast('Employee not found','error'); return; }
-  p.lines = await buildCalculatedLines(emp);
+  const ctx = await buildPayrollContextFor(emp, p.pay_run_id);
+  p.lines = await buildCalculatedLines(emp, undefined, ctx);
   toast('Payslip rebuilt from employee defaults');
   renderPayslipEditor();
 }
 function updatePayslipLine(idx, field, value, isAmount){
   const p = window._payslipDraft;
   const l = p.lines[idx]; if (!l) return;
+  if (isLockedComponent(l.code)) return; // calculated lines are read-only
+  // For OT (hourly multiplier) lines, the rate is locked too
+  const c = (window._payslipComponents||[]).find(x=>x.code===l.code);
+  if (c?.value_type === 'hourly_multiplier' && field === 'rate') return;
   l[field] = Number(value)||0;
   if (!isAmount){
     // recompute amount from units * rate
@@ -2096,7 +2276,23 @@ function removePayslipLine(idx){
 function addPayslipLine(){
   const code = document.getElementById('ps-add').value;
   const c = window._payslipComponents.find(x=>x.code===code); if (!c) return;
-  window._payslipDraft.lines.push({ code:c.code, label:c.label, category:c.category, units:1, rate: c.default_amount||0, amount: c.default_amount||0 });
+  const emp = empById(window._payslipDraft.employee_id);
+  const vt = c.value_type || 'fixed';
+  let units = 1, rate = c.default_amount||0, amount = c.default_amount||0;
+  if (vt === 'hourly_multiplier'){
+    const mult = Number(c.default_amount)||1;
+    rate = toMoney(getHourlyRate(emp) * mult);
+    units = 0; amount = 0; // user enters hours
+  } else if (vt === 'employee_linked'){
+    // Pull from employee record
+    if (c.linked_field === 'salary_monthly')          amount = toMoney((Number(emp?.salary)||0)/12);
+    else if (c.linked_field === 'car_allowance_monthly') amount = toMoney(Number(emp?.car_allowance_monthly)||0);
+    else if (c.linked_field === 'car_sacrifice_monthly') amount = -toMoney(Number(emp?.car_sacrifice_monthly)||0);
+    rate = amount;
+  } else if (vt === 'calculated'){
+    amount = 0; rate = 0; // recompute will populate
+  }
+  window._payslipDraft.lines.push({ code:c.code, label:c.label, category:c.category, units, rate: toMoney(rate), amount: toMoney(amount) });
   renderPayslipEditor();
 }
 async function savePayslipDraft(){
@@ -2244,17 +2440,38 @@ async function renderMyPayslips(c){
 async function renderPayComponents(c){
   const components = (await idbGetAll('pay_components')).sort((a,b)=>(a.display_order||0)-(b.display_order||0));
   setTopbar(`<button class="btn btn-outline" onclick="navigate('payroll')">← Back to payroll</button> <button class="btn btn-accent" onclick="payComponentForm()">+ Add component</button>`);
+  const fmtDefault = c => {
+    const vt = c.value_type || 'fixed';
+    if (vt === 'fixed')              return c.default_amount ? fmtPay(c.default_amount) : '—';
+    if (vt === 'hourly_multiplier')  return `<strong>× ${Number(c.default_amount||1).toFixed(2)}</strong> hourly`;
+    if (vt === 'employee_linked')    return `<span class="muted small">Linked – employee record</span>`;
+    if (vt === 'calculated')         return `<span class="muted small">Calculated by engine</span>`;
+    return '—';
+  };
+  const fmtVT = vt => ({fixed:'£ fixed', hourly_multiplier:'× hourly', employee_linked:'Employee field', calculated:'Calculated'})[vt||'fixed'];
   c.innerHTML = `
     <div class="card"><div class="card-head"><h3>Pay components</h3></div>
-      <p class="small muted">Components used on payslips. Disable a component to keep historical payslips intact but hide it from new ones.</p>
-      <div class="table-wrap"><table><thead><tr><th>Order</th><th>Code</th><th>Label</th><th>Category</th><th>Recurring</th><th>Default</th><th>Enabled</th><th></th></tr></thead><tbody>${
-        components.map(c=>`<tr><td>${c.display_order||0}</td><td><code>${esc(c.code)}</code></td><td>${esc(c.label)}</td><td><span class="badge ${c.category==='payment'?'b-blue':(c.category==='deduction'?'b-red':'b-grey')}">${c.category}</span></td><td>${c.recurring?'Yes':'No'}</td><td>${c.default_amount?fmtPay(c.default_amount):'—'}</td><td>${c.enabled?'<span class="badge b-green">Enabled</span>':'<span class="badge b-grey">Disabled</span>'}</td><td style="text-align:right;white-space:nowrap"><button class="btn btn-outline btn-sm" onclick="payComponentForm('${c.id}')">Edit</button>${c.system?'':` <button class="btn btn-danger btn-sm" onclick="deletePayComponent('${c.id}')">×</button>`}</td></tr>`).join('')
+      <p class="small muted">Components used on payslips. Fixed (£) and hourly-multiplier values are editable here. Items linked to the employee record (basic pay, car allowance, sacrifices) or computed by the payroll engine (PAYE, NIC, employer pension) cannot be edited here — they're set per-employee or auto-calculated. Disable a component to hide it from new payslips while keeping historical ones intact.</p>
+      <div class="table-wrap"><table><thead><tr><th>Order</th><th>Code</th><th>Label</th><th>Category</th><th>Type</th><th>Recurring</th><th>Default</th><th>Enabled</th><th></th></tr></thead><tbody>${
+        components.map(c=>{ const editable = (c.value_type||'fixed')==='fixed' || c.value_type==='hourly_multiplier'; return `<tr><td>${c.display_order||0}</td><td><code>${esc(c.code)}</code></td><td>${esc(c.label)}</td><td><span class="badge ${c.category==='payment'?'b-blue':(c.category==='deduction'?'b-red':'b-grey')}">${c.category}</span></td><td class="small">${fmtVT(c.value_type)}</td><td>${c.recurring?'Yes':'No'}</td><td>${fmtDefault(c)}</td><td>${c.enabled?'<span class="badge b-green">Enabled</span>':'<span class="badge b-grey">Disabled</span>'}</td><td style="text-align:right;white-space:nowrap">${editable?`<button class="btn btn-outline btn-sm" onclick="payComponentForm('${c.id}')">Edit</button>`:`<button class="btn btn-outline btn-sm" disabled style="opacity:.5;cursor:not-allowed" title="${c.value_type==='calculated'?'Calculated by engine':'Set per employee'}">Locked</button>`}${c.system?'':` <button class="btn btn-danger btn-sm" onclick="deletePayComponent('${c.id}')">×</button>`}</td></tr>`; }).join('')
       }</tbody></table></div>
     </div>`;
 }
 async function payComponentForm(id){
   const all = await idbGetAll('pay_components');
-  const c = id ? all.find(x=>x.id===id) : { display_order: (all.reduce((m,x)=>Math.max(m,x.display_order||0),0))+10, category:'payment', enabled:true, recurring:false, default_amount:0 };
+  const c = id ? all.find(x=>x.id===id) : { display_order: (all.reduce((m,x)=>Math.max(m,x.display_order||0),0))+10, category:'payment', enabled:true, recurring:false, default_amount:0, value_type:'fixed' };
+  const vt = c.value_type || 'fixed';
+  const lockedDefault = vt === 'employee_linked' || vt === 'calculated';
+  const defaultLabel =
+      vt === 'hourly_multiplier' ? 'Multiplier × hourly rate'
+    : vt === 'employee_linked'   ? 'Default amount'
+    : vt === 'calculated'        ? 'Default amount'
+    : 'Default amount (£)';
+  const defaultHint =
+      vt === 'hourly_multiplier' ? 'e.g. 1.5 for time-and-a-half. Applied to the employee\'s hourly rate when this line is added.'
+    : vt === 'employee_linked'   ? 'Set per employee on the employee record (not here).'
+    : vt === 'calculated'        ? 'Calculated automatically by the payroll engine.'
+    : '';
   openModal(`<h2>${id?'Edit':'Add'} pay component</h2>
     <form onsubmit="savePayComponent(event,'${id||''}')">
       <div class="form-row">
@@ -2263,13 +2480,14 @@ async function payComponentForm(id){
       </div>
       <div class="form-row-3">
         <div class="form-group"><label>Category</label><select id="pc-cat" ${id&&c.system?'disabled':''}><option value="payment" ${c.category==='payment'?'selected':''}>Payment</option><option value="deduction" ${c.category==='deduction'?'selected':''}>Deduction</option><option value="other" ${c.category==='other'?'selected':''}>Other (employer cost)</option></select></div>
+        <div class="form-group"><label>Value type</label><select id="pc-vt" ${id&&c.system?'disabled':''}><option value="fixed" ${vt==='fixed'?'selected':''}>£ fixed amount</option><option value="hourly_multiplier" ${vt==='hourly_multiplier'?'selected':''}>× hourly rate (overtime)</option><option value="employee_linked" ${vt==='employee_linked'?'selected':''}>Linked to employee field</option><option value="calculated" ${vt==='calculated'?'selected':''}>Calculated by engine</option></select></div>
         <div class="form-group"><label>Display order</label><input id="pc-order" type="number" value="${c.display_order||0}"></div>
-        <div class="form-group"><label>Default amount (£)</label><input id="pc-default" type="number" step="0.01" value="${c.default_amount||0}"></div>
       </div>
       <div class="form-row">
-        <div class="form-group"><label>Recurring (auto-added to every payslip)</label><select id="pc-recurring"><option value="false" ${!c.recurring?'selected':''}>No</option><option value="true" ${c.recurring?'selected':''}>Yes</option></select></div>
-        <div class="form-group"><label>Enabled</label><select id="pc-enabled"><option value="true" ${c.enabled!==false?'selected':''}>Yes</option><option value="false" ${c.enabled===false?'selected':''}>No</option></select></div>
+        <div class="form-group"><label>${defaultLabel}</label><input id="pc-default" type="number" step="0.01" value="${c.default_amount||0}" ${lockedDefault?'disabled style="opacity:.5;cursor:not-allowed"':''}>${defaultHint?`<div class="small muted">${defaultHint}</div>`:''}</div>
+        <div class="form-group"><label>Recurring (auto-added to every payslip)</label><select id="pc-recurring" ${vt==='calculated'?'disabled':''}><option value="false" ${!c.recurring?'selected':''}>No</option><option value="true" ${c.recurring?'selected':''}>Yes</option></select></div>
       </div>
+      <div class="form-group"><label>Enabled</label><select id="pc-enabled"><option value="true" ${c.enabled!==false?'selected':''}>Yes</option><option value="false" ${c.enabled===false?'selected':''}>No</option></select></div>
       <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
     </form>`);
 }
@@ -2284,6 +2502,8 @@ async function savePayComponent(ev, id){
     code,
     label: val('pc-label'),
     category: existing?.system ? existing.category : val('pc-cat'),
+    value_type: existing?.system ? existing.value_type : (val('pc-vt') || 'fixed'),
+    linked_field: existing?.linked_field,
     display_order: Number(val('pc-order'))||0,
     default_amount: Number(val('pc-default'))||0,
     recurring: val('pc-recurring')==='true',
@@ -2364,11 +2584,17 @@ async function deleteUser(id){ const u=(await idbGetAll('users')).find(x=>x.id==
 async function renderSettings(c){
   const hys = await getSetting('holiday_year_start','01-01');
   const cn = await getSetting('company_name','Komfort Partitioning Ltd');
+  const toRef = await getSetting('tax_office_ref','');
+  const tys = await getSetting('tax_year_start','04-06');
   c.innerHTML = `
-    <div class="card" style="max-width:560px">
+    <div class="card" style="max-width:640px">
       <div class="card-head"><h3>Company settings</h3></div>
       <div class="form-group"><label>Company name</label><input id="set-cn" value="${esc(cn)}"></div>
-      <div class="form-group"><label>Holiday year starts (MM-DD)</label><input id="set-hys" value="${esc(hys)}" placeholder="01-01"><div class="small muted">e.g. 01-01 for calendar year, 04-01 for April start.</div></div>
+      <div class="form-group"><label>Tax Office reference</label><input id="set-to-ref" value="${esc(toRef)}" placeholder="e.g. 120/AB12345"><div class="small muted">Shown on every payslip next to the employer name.</div></div>
+      <div class="form-row">
+        <div class="form-group"><label>Holiday year starts (MM-DD)</label><input id="set-hys" value="${esc(hys)}" placeholder="01-01"><div class="small muted">e.g. 01-01 for calendar year, 04-01 for April start.</div></div>
+        <div class="form-group"><label>Tax year starts (MM-DD)</label><input id="set-tys" value="${esc(tys)}" placeholder="04-06"><div class="small muted">UK default is 04-06 (6 April).</div></div>
+      </div>
       <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
     </div>
     <div class="card" style="max-width:560px">
@@ -2380,7 +2606,13 @@ async function renderSettings(c){
       </div>
     </div>`;
 }
-async function saveSettings(){ await setSetting('company_name', val('set-cn')); await setSetting('holiday_year_start', val('set-hys')||'01-01'); toast('Settings saved'); }
+async function saveSettings(){
+  await setSetting('company_name', val('set-cn'));
+  await setSetting('tax_office_ref', val('set-to-ref'));
+  await setSetting('holiday_year_start', val('set-hys')||'01-01');
+  await setSetting('tax_year_start', val('set-tys')||'04-06');
+  toast('Settings saved');
+}
 async function exportAllData(){
   const dump = {};
   for (const s of STORES) dump[s] = await idbGetAll(s);
@@ -2552,6 +2784,7 @@ async function saveMyPassword(ev){
   await openDB();
   await seedDefaults();
   await seedPayComponentsIfEmpty();
+  await migratePayComponents();
   const sid = sessionStorage.getItem('hr_session');
   if (sid){ const u = await idbGet('users', sid); if (u){ state.user = u; await enterApp(); return; } }
 })();
