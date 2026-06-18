@@ -190,6 +190,9 @@
       .main { margin-left: 0; }
       .content { padding: 0; }
       #app.active { display: block; }
+      body { background: white; }
+      .payslip-print { padding: 16px; color: #000; page-break-inside: avoid; }
+      .payslip-print table { color: #000; }
     }
   </style>
 </head>
@@ -256,8 +259,8 @@
 // backend later without changing the data shape.
 // ═══════════════════════════════════════════════════════════════
 const DB_NAME = 'KomfortHR';
-const DB_VERSION = 1;
-const STORES = ['users','employees','contacts','documents','leave','reviews','objectives','tasks','audit_log','settings'];
+const DB_VERSION = 2;
+const STORES = ['users','employees','contacts','documents','leave','reviews','objectives','tasks','audit_log','settings','pay_components','pay_runs','payslips'];
 let db = null;
 
 function openDB() {
@@ -308,6 +311,21 @@ function openDB() {
       }
       if (!d.objectStoreNames.contains('settings')) {
         d.createObjectStore('settings', { keyPath: 'key' });
+      }
+      if (!d.objectStoreNames.contains('pay_components')) {
+        const s = d.createObjectStore('pay_components', { keyPath: 'id' });
+        s.createIndex('code', 'code', { unique: true });
+        s.createIndex('category', 'category');
+      }
+      if (!d.objectStoreNames.contains('pay_runs')) {
+        const s = d.createObjectStore('pay_runs', { keyPath: 'id' });
+        s.createIndex('period', 'period');
+        s.createIndex('status', 'status');
+      }
+      if (!d.objectStoreNames.contains('payslips')) {
+        const s = d.createObjectStore('payslips', { keyPath: 'id' });
+        s.createIndex('pay_run_id', 'pay_run_id');
+        s.createIndex('employee_id', 'employee_id');
       }
     };
     req.onsuccess = (e) => { db = e.target.result; resolve(db); };
@@ -375,7 +393,7 @@ async function seedDefaults(){
   const mgrId = uuid(), empId = uuid(), e3 = uuid(), e4 = uuid(), e5 = uuid();
   const mk = (id, o) => ({
     id, title:o.ttl||'', employee_number:o.num, first_name:o.fn, last_name:o.ln, preferred_name:'',
-    date_of_birth:o.dob, gender:o.g||'', ni_number:o.ni,
+    date_of_birth:o.dob, gender:o.g||'', ni_number:o.ni, tax_code:o.tax||'1257L',
     address_line1:o.a1||'', address_line2:'', city:o.city||'', postcode:o.pc||'',
     personal_email:o.pe||'', work_email:o.we, mobile_phone:o.mob||'', home_phone:'',
     job_title:o.jt, department:o.dept, site:o.site, manager_id:o.mgr||null,
@@ -492,6 +510,7 @@ const NAV = {
     { id:'leave-other',   label:'Other Absences',   ic:'⋯', badge:'pendingOther' },
     { id:'performance',   label:'Performance',      ic:'★' },
     { id:'documents',     label:'Documents',        ic:'▤' },
+    { id:'payroll',       label:'Payroll',          ic:'£' },
     { id:'reports',       label:'Reports',          ic:'▣' },
     { id:'tasks',         label:'HR Tasks',         ic:'✔', badge:'openTasks' },
     { id:'users',         label:'User Accounts',    ic:'⚷' },
@@ -509,6 +528,7 @@ const NAV = {
     { id:'my-sickness',   label:'My Sickness',      ic:'＋' },
     { id:'my-other',      label:'My Other Absences',ic:'⋯' },
     { id:'my-performance',label:'My Performance',   ic:'★' },
+    { id:'my-payslips',   label:'My Payslips',      ic:'£' },
     { id:'documents',     label:'Documents',        ic:'▤' },
     { id:'tasks',         label:'My Tasks',         ic:'✔', badge:'openTasks' }
   ],
@@ -518,6 +538,7 @@ const NAV = {
     { id:'my-sickness',   label:'My Sickness',      ic:'＋' },
     { id:'my-other',      label:'My Other Absences',ic:'⋯' },
     { id:'my-performance',label:'My Performance',   ic:'★' },
+    { id:'my-payslips',   label:'My Payslips',      ic:'£' },
     { id:'documents',     label:'Company Documents',ic:'▤' }
   ]
 };
@@ -566,7 +587,7 @@ async function navigate(page){
   document.getElementById('sidebar').classList.remove('open');
   await refreshCaches();
   const mgr = state.user.role==='manager';
-  const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', 'leave-holiday':mgr?'Team Holiday':'Holiday', 'leave-sickness':mgr?'Team Sickness':'Sickness', 'leave-other':mgr?'Team Absences':'Other Absences', performance:mgr?'Team Performance':'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: mgr?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-sickness':'My Sickness', 'my-other':'My Other Absences', 'my-performance':'My Performance' };
+  const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', 'leave-holiday':mgr?'Team Holiday':'Holiday', 'leave-sickness':mgr?'Team Sickness':'Sickness', 'leave-other':mgr?'Team Absences':'Other Absences', performance:mgr?'Team Performance':'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: mgr?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', payroll:'Payroll', 'pay-run':'Pay Run', payslip:'Payslip', 'pay-components':'Pay Components', 'my-payslips':'My Payslips', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-sickness':'My Sickness', 'my-other':'My Other Absences', 'my-performance':'My Performance' };
   document.getElementById('page-title').textContent = titles[page] || page;
   const c = document.getElementById('content');
   c.innerHTML = '<div class="empty">Loading…</div>';
@@ -584,6 +605,11 @@ async function navigate(page){
       case 'tasks': await renderTasks(c); break;
       case 'users': await renderUsers(c); break;
       case 'settings': await renderSettings(c); break;
+      case 'payroll': await renderPayroll(c); break;
+      case 'pay-run': await renderPayRun(c); break;
+      case 'payslip': await renderPayslip(c); break;
+      case 'pay-components': await renderPayComponents(c); break;
+      case 'my-payslips': await renderMyPayslips(c); break;
       case 'my-profile': await renderMyProfile(c); break;
       case 'my-leave': await renderMyLeave(c); break;
       case 'my-sickness': await renderMySickness(c); break;
@@ -928,6 +954,7 @@ function empTabPersonal(body, id){
     <dt>Date of birth</dt><dd>${fmtDate(e.date_of_birth)}</dd>
     <dt>Gender</dt><dd>${esc(e.gender)||'—'}</dd>
     <dt>NI number</dt><dd>${esc(e.ni_number)||'—'}</dd>
+    <dt>Tax code</dt><dd>${esc(e.tax_code)||'—'}</dd>
     <dt>Address</dt><dd>${[e.address_line1,e.address_line2,e.city,e.postcode].filter(Boolean).map(esc).join(', ')||'—'}</dd>
     <dt>Mobile</dt><dd>${esc(e.mobile_phone)||'—'}</dd>
     <dt>Home phone</dt><dd>${esc(e.home_phone)||'—'}</dd>
@@ -1060,6 +1087,10 @@ function employeeForm(id){
           <div class="form-group"><label>Gender</label><select id="f-gender"><option value="">—</option>${['Female','Male','Other','Prefer not to say'].map(g=>`<option ${e.gender===g?'selected':''}>${g}</option>`).join('')}</select></div>
           <div class="form-group"><label>NI number</label><input id="f-ni" value="${esc(e.ni_number||'')}" placeholder="AB123456C"></div>
         </div>
+        <div class="form-row">
+          <div class="form-group"><label>Tax code</label><input id="f-tax" value="${esc(e.tax_code||'')}" placeholder="1257L"></div>
+          <div class="form-group"></div>
+        </div>
         <div class="form-group"><label>Address line 1</label><input id="f-a1" value="${esc(e.address_line1||'')}"></div>
         <div class="form-row-3">
           <div class="form-group"><label>Address line 2</label><input id="f-a2" value="${esc(e.address_line2||'')}"></div>
@@ -1121,7 +1152,7 @@ async function saveEmployee(ev, id){
     title: val('f-title'),
     employee_number: val('f-num'), first_name: val('f-fn'), last_name: val('f-ln'),
     preferred_name: existing?.preferred_name||'',
-    date_of_birth: val('f-dob'), gender: val('f-gender'), ni_number: val('f-ni'),
+    date_of_birth: val('f-dob'), gender: val('f-gender'), ni_number: val('f-ni'), tax_code: val('f-tax'),
     address_line1: val('f-a1'), address_line2: val('f-a2'), city: val('f-city'), postcode: val('f-pc'),
     personal_email: val('f-pe'), work_email: val('f-we'), mobile_phone: val('f-mob'), home_phone: existing?.home_phone||'',
     job_title: val('f-jt'), department: val('f-dept'), site: val('f-site'),
@@ -1518,6 +1549,10 @@ async function renderReports(c){
       <div class="table-wrap"><table id="rep-leave"><thead><tr><th>Employee</th><th>Site</th><th>Allowance</th><th>Adj</th><th>Entitlement</th><th>Booked</th><th>Pending</th><th>Remaining</th></tr></thead><tbody><tr><td colspan="8" class="muted">Loading…</td></tr></tbody></table></div>
     </div>
 
+    <div class="card"><div class="card-head"><h3>Payroll YTD (tax year)</h3><button class="btn btn-outline btn-sm" onclick="exportPayrollYTD()">Export CSV</button></div>
+      <div class="table-wrap"><table id="rep-payroll"><thead><tr><th>Employee</th><th>Tax code</th><th>Gross YTD</th><th>PAYE YTD</th><th>NIC (EE) YTD</th><th>NI (ER) YTD</th><th>Pension (ER) YTD</th></tr></thead><tbody><tr><td colspan="7" class="muted">Loading…</td></tr></tbody></table></div>
+    </div>
+
     <div class="card"><div class="card-head"><h3>Current employees</h3><button class="btn btn-outline btn-sm" onclick="exportHeadcount()">Export CSV</button></div>
       <div class="table-wrap"><table><thead><tr><th>No.</th><th>Name</th><th>Job title</th><th>Dept</th><th>Site</th><th>Start date</th><th>Service</th></tr></thead><tbody>${
         active.sort((a,b)=>a.last_name.localeCompare(b.last_name)).map(e=>`<tr><td>${esc(e.employee_number)}</td><td>${esc(e.first_name+' '+e.last_name)}</td><td>${esc(e.job_title)}</td><td>${esc(e.department)}</td><td>${esc(e.site)}</td><td>${fmtDate(e.start_date)}</td><td>${serviceYears(e.start_date)}</td></tr>`).join('')
@@ -1532,8 +1567,22 @@ async function renderReports(c){
     rows.push(`<tr><td>${esc(e.first_name+' '+e.last_name)}</td><td>${esc(e.site)}</td><td>${b.allowance}</td><td>${b.adjustments?(b.adjustments>0?'+':'')+b.adjustments:'—'}</td><td>${b.entitlement}</td><td>${b.booked}</td><td>${b.pending}</td><td><strong>${b.remaining}</strong></td></tr>`);
   }
   tb.innerHTML = rows.join('') || '<tr><td colspan="8" class="muted">—</td></tr>';
+
+  // fill payroll YTD async
+  const ptb = document.querySelector('#rep-payroll tbody');
+  const prows = [];
+  for (const e of active.sort((a,b)=>a.last_name.localeCompare(b.last_name))){
+    const y = await ytdForEmployee(e.id);
+    prows.push(`<tr><td>${esc(e.first_name+' '+e.last_name)}</td><td>${esc(e.tax_code)||'—'}</td><td>${fmtPay(y.gross)}</td><td>${fmtPay(y.paye)}</td><td>${fmtPay(y.nic_ee)}</td><td>${fmtPay(y.ni_er)}</td><td>${fmtPay(y.pension_er)}</td></tr>`);
+  }
+  ptb.innerHTML = prows.join('') || '<tr><td colspan="7" class="muted">No payroll data yet.</td></tr>';
 }
 function serviceYears(start){ return serviceYM(start); }
+async function exportPayrollYTD(){
+  const rows = [['Employee','Tax code','Gross YTD','PAYE YTD','NIC EE YTD','NI ER YTD','Pension ER YTD']];
+  for (const e of state.employees.filter(x=>x.status==='active')){ const y=await ytdForEmployee(e.id); rows.push([e.first_name+' '+e.last_name, e.tax_code||'', y.gross, y.paye, y.nic_ee, y.ni_er, y.pension_er]); }
+  downloadCSV('komfort-payroll-ytd.csv', rows);
+}
 function exportHeadcount(){
   const rows = [['Number','First name','Last name','Job title','Department','Site','Employment type','Start date','Status']];
   state.employees.filter(e=>e.status==='active').forEach(e=>rows.push([e.employee_number,e.first_name,e.last_name,e.job_title,e.department,e.site,e.employment_type,e.start_date,e.status]));
@@ -1610,6 +1659,486 @@ async function saveTask(ev, id){
 async function completeTask(id){ const t=(await idbGetAll('tasks')).find(x=>x.id===id); t.status='done'; t.completed_at=nowISO(); await idbPut('tasks',t); toast('Task completed'); navigate(state.page); }
 async function reopenTask(id){ const t=(await idbGetAll('tasks')).find(x=>x.id===id); t.status='open'; t.completed_at=null; await idbPut('tasks',t); navigate(state.page); }
 async function deleteTask(id){ if(!confirm('Delete this task?'))return; await idbDelete('tasks',id); closeModal(); toast('Deleted'); navigate(state.page); }
+
+// ═══════════════════════════════════════════════
+// PAYROLL
+// ═══════════════════════════════════════════════
+const DEFAULT_PAY_COMPONENTS = [
+  { code:'basic_pay',         label:'Basic Pay',                  category:'payment',   recurring:true,  default_amount:0,  display_order:10, enabled:true, computed:'monthly_salary', system:true },
+  { code:'car_allowance',     label:'Car Allowance',              category:'payment',   recurring:true,  default_amount:0,  display_order:15, enabled:true, system:true },
+  { code:'ot_x1',             label:'Overtime x1',                category:'payment',   recurring:false, default_amount:0,  display_order:20, enabled:true, hourly:true, system:true },
+  { code:'ot_x1_5',           label:'Overtime x1.5',              category:'payment',   recurring:false, default_amount:0,  display_order:21, enabled:true, hourly:true, system:true },
+  { code:'ot_x2',             label:'Overtime x2',                category:'payment',   recurring:false, default_amount:0,  display_order:22, enabled:true, hourly:true, system:true },
+  { code:'first_aid',         label:'First Aid',                  category:'payment',   recurring:false, default_amount:15, display_order:30, enabled:true, system:true },
+  { code:'hse',               label:'HSE',                        category:'payment',   recurring:false, default_amount:15, display_order:31, enabled:true, system:true },
+  { code:'fire_marshal',      label:'Fire Marshal',               category:'payment',   recurring:false, default_amount:15, display_order:32, enabled:true, system:true },
+  { code:'pension_sacrifice', label:'Salary Sacrifice (Pension)', category:'payment',   recurring:false, default_amount:0,  display_order:40, enabled:true, system:true },
+  { code:'car_sacrifice',     label:'Salary Sacrifice (Car)',     category:'payment',   recurring:false, default_amount:0,  display_order:41, enabled:true, system:true },
+  { code:'paye',              label:'PAYE',                       category:'deduction', recurring:false, default_amount:0,  display_order:50, enabled:true, system:true },
+  { code:'nic_ee',            label:"Employees NIC",              category:'deduction', recurring:false, default_amount:0,  display_order:51, enabled:true, system:true },
+  { code:'pension_er',        label:'Employers Pension',          category:'other',     recurring:false, default_amount:0,  display_order:60, enabled:true, system:true },
+  { code:'ni_er',             label:'Employers NI',               category:'other',     recurring:false, default_amount:0,  display_order:61, enabled:true, system:true }
+];
+async function seedPayComponentsIfEmpty(){
+  const existing = await idbGetAll('pay_components');
+  if (existing.length) return;
+  for (const c of DEFAULT_PAY_COMPONENTS){
+    await idbPut('pay_components', { id: uuid(), ...c });
+  }
+}
+// UK tax year: 6 April – 5 April. Override via setting 'tax_year_start' (MM-DD).
+async function taxYearBounds(ref){
+  const mmdd = await getSetting('tax_year_start','04-06');
+  const [mm,dd] = mmdd.split('-').map(Number);
+  const r = ref ? new Date(ref) : new Date();
+  let startYear = r.getFullYear();
+  const boundary = new Date(startYear, mm-1, dd);
+  if (r < boundary) startYear -= 1;
+  const start = new Date(startYear, mm-1, dd);
+  const end = new Date(startYear+1, mm-1, dd); end.setDate(end.getDate()-1);
+  return { start: start.toISOString().slice(0,10), end: end.toISOString().slice(0,10), label:`${startYear}/${String(startYear+1).slice(2)}` };
+}
+function fmtPay(n){ if (n==null||isNaN(n)) return '0.00'; const v=Number(n); return (v<0?'-':'')+'£'+Math.abs(v).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function fmtPayPlain(n){ if (n==null||isNaN(n)) return '0.00'; return Number(n).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function toMoney(n){ return Math.round((Number(n)||0)*100)/100; }
+function periodLabel(period){ if(!period||!/^\d{4}-\d{2}$/.test(period)) return period||'—'; const [y,m]=period.split('-').map(Number); return new Date(y,m-1,1).toLocaleDateString('en-GB',{month:'long',year:'numeric'}); }
+function periodMonthNumber(period){ // 1-based month of UK tax year (Apr=1)
+  if(!period) return ''; const m=Number(period.split('-')[1]); return ((m+8)%12)+1;
+}
+function payslipTotals(lines){
+  let gross=0, deductions=0;
+  let employerNI=0, employerPension=0;
+  lines.forEach(l => {
+    const amt = Number(l.amount)||0;
+    if (l.category==='payment') gross += amt;
+    else if (l.category==='deduction') deductions += amt;
+    else if (l.category==='other'){
+      if (l.code==='ni_er') employerNI += amt;
+      if (l.code==='pension_er') employerPension += amt;
+    }
+  });
+  return { gross: toMoney(gross), deductions: toMoney(deductions), net: toMoney(gross-deductions), employer_ni: toMoney(employerNI), employer_pension: toMoney(employerPension) };
+}
+async function ytdForEmployee(empId, uptoPeriod){
+  // Sum finalised payslips for the employee in the current tax year UP TO and including uptoPeriod.
+  const bounds = await taxYearBounds(uptoPeriod ? uptoPeriod+'-01' : null);
+  const runs = await idbGetAll('pay_runs');
+  const inYearRuns = runs.filter(r => r.status==='finalised' && r.pay_date>=bounds.start && r.pay_date<=bounds.end && (!uptoPeriod || r.period<=uptoPeriod));
+  const runIds = new Set(inYearRuns.map(r=>r.id));
+  const slips = (await idbByIndex('payslips','employee_id',empId)).filter(p => runIds.has(p.pay_run_id));
+  let gross=0, paye=0, nicEe=0, niEr=0, pensionEr=0;
+  slips.forEach(p => {
+    gross += Number(p.gross_pay)||0;
+    (p.lines||[]).forEach(l => {
+      if (l.code==='paye') paye += Number(l.amount)||0;
+      if (l.code==='nic_ee') nicEe += Number(l.amount)||0;
+      if (l.code==='ni_er') niEr += Number(l.amount)||0;
+      if (l.code==='pension_er') pensionEr += Number(l.amount)||0;
+    });
+  });
+  return { gross:toMoney(gross), paye:toMoney(paye), nic_ee:toMoney(nicEe), ni_er:toMoney(niEr), pension_er:toMoney(pensionEr), bounds };
+}
+async function payComponentsSorted(){
+  return (await idbGetAll('pay_components')).filter(c=>c.enabled).sort((a,b)=>(a.display_order||0)-(b.display_order||0));
+}
+
+// ── Pay run create / generate drafts ──
+async function newPayRunForm(){
+  const today6 = new Date(); const yyyy=today6.getFullYear(); const mm=String(today6.getMonth()+1).padStart(2,'0');
+  openModal(`<h2>New pay run</h2>
+    <form onsubmit="createPayRun(event)">
+      <div class="form-row">
+        <div class="form-group"><label class="req">Period (YYYY-MM)</label><input id="pr-period" value="${yyyy}-${mm}" pattern="\\d{4}-\\d{2}" required></div>
+        <div class="form-group"><label class="req">Pay date</label><input id="pr-date" type="date" value="${today()}" required></div>
+      </div>
+      <p class="small muted">Draft payslips will be created for all active employees, pre-populated with their basic pay (annual salary ÷ 12) and any recurring components. You can then edit each payslip before finalising the run.</p>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Create draft run</button></div>
+    </form>`);
+}
+async function createPayRun(ev){
+  ev.preventDefault();
+  const period = val('pr-period'); const payDate = val('pr-date');
+  if (!/^\d{4}-\d{2}$/.test(period)){ toast('Period must be YYYY-MM','error'); return; }
+  const existing = (await idbGetAll('pay_runs')).find(r=>r.period===period);
+  if (existing){ toast('A pay run for that period already exists','error'); return; }
+  const runId = uuid();
+  await idbPut('pay_runs', { id:runId, period, pay_date:payDate, status:'draft', created_at:nowISO(), finalised_at:null, created_by:state.user.username });
+  const components = await payComponentsSorted();
+  const active = state.employees.filter(e=>e.status==='active');
+  for (const e of active){
+    const lines = [];
+    components.forEach(c => {
+      if (!c.recurring) return;
+      let amount = c.default_amount || 0;
+      let units = 1, rate = amount;
+      if (c.computed==='monthly_salary'){ amount = toMoney((Number(e.salary)||0)/12); rate = amount; }
+      lines.push({ code:c.code, label:c.label, category:c.category, units, rate: toMoney(rate), amount: toMoney(amount) });
+    });
+    const t = payslipTotals(lines);
+    await idbPut('payslips', { id:uuid(), pay_run_id:runId, employee_id:e.id, lines, gross_pay:t.gross, total_deductions:t.deductions, net_pay:t.net, employer_ni:t.employer_ni, employer_pension:t.employer_pension, tax_code_at_pay:e.tax_code||'', ni_number_at_pay:e.ni_number||'', personnel_number_at_pay:e.employee_number||'', created_at:nowISO(), updated_at:nowISO() });
+  }
+  await logAction('pay_run_create', { period, run_id:runId });
+  closeModal(); toast('Draft pay run created');
+  window._payRunId = runId;
+  navigate('pay-run');
+}
+
+async function renderPayroll(c){
+  const runs = (await idbGetAll('pay_runs')).sort((a,b)=>b.period.localeCompare(a.period));
+  setTopbar(`<button class="btn btn-outline" onclick="navigate('pay-components')">Pay components</button> <button class="btn btn-accent" onclick="newPayRunForm()">+ New pay run</button>`);
+  // Compute totals per run
+  const slipsAll = await idbGetAll('payslips');
+  const runRows = runs.map(r => {
+    const slips = slipsAll.filter(p=>p.pay_run_id===r.id);
+    const gross = slips.reduce((a,p)=>a+(Number(p.gross_pay)||0),0);
+    const net = slips.reduce((a,p)=>a+(Number(p.net_pay)||0),0);
+    const ded = slips.reduce((a,p)=>a+(Number(p.total_deductions)||0),0);
+    return { r, slips, gross, net, ded };
+  });
+  const ytd = runs.length ? runs[0].period : '';
+  c.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat"><div class="num">${runs.length}</div><div class="lbl">Pay runs</div></div>
+      <div class="stat info"><div class="num">${runs.filter(r=>r.status==='draft').length}</div><div class="lbl">In draft</div></div>
+      <div class="stat ok"><div class="num">${runs.filter(r=>r.status==='finalised').length}</div><div class="lbl">Finalised</div></div>
+    </div>
+    <div class="card"><div class="card-head"><h3>Pay runs</h3></div>
+      ${runs.length?`<div class="table-wrap"><table><thead><tr><th>Period</th><th>Pay date</th><th>Payslips</th><th>Gross</th><th>Deductions</th><th>Net</th><th>Status</th><th></th></tr></thead><tbody>${
+        runRows.map(({r,slips,gross,ded,net})=>`<tr class="clickable" onclick="openPayRun('${r.id}')"><td><strong>${periodLabel(r.period)}</strong></td><td>${fmtDate(r.pay_date)}</td><td>${slips.length}</td><td>${fmtPay(gross)}</td><td>${fmtPay(ded)}</td><td><strong>${fmtPay(net)}</strong></td><td>${r.status==='finalised'?'<span class="badge b-green">Finalised</span>':'<span class="badge b-amber">Draft</span>'}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="event.stopPropagation();openPayRun('${r.id}')">Open</button></td></tr>`).join('')
+      }</tbody></table></div>`:'<div class="empty small">No pay runs yet. Click "+ New pay run" to create one.</div>'}
+    </div>`;
+}
+function openPayRun(id){ window._payRunId = id; navigate('pay-run'); }
+function openPayslip(id){ window._payslipId = id; navigate('payslip'); }
+
+async function renderPayRun(c){
+  const runId = window._payRunId;
+  if (!runId){ navigate('payroll'); return; }
+  const run = await idbGet('pay_runs', runId);
+  if (!run){ toast('Pay run not found','error'); navigate('payroll'); return; }
+  const slips = (await idbByIndex('payslips','pay_run_id',runId)).sort((a,b)=>{ const ae=empById(a.employee_id), be=empById(b.employee_id); return (ae?.last_name||'').localeCompare(be?.last_name||''); });
+  const gross = slips.reduce((a,p)=>a+(Number(p.gross_pay)||0),0);
+  const ded = slips.reduce((a,p)=>a+(Number(p.total_deductions)||0),0);
+  const net = slips.reduce((a,p)=>a+(Number(p.net_pay)||0),0);
+  const erNI = slips.reduce((a,p)=>a+(Number(p.employer_ni)||0),0);
+  const erPen = slips.reduce((a,p)=>a+(Number(p.employer_pension)||0),0);
+  const draft = run.status==='draft';
+  setTopbar(`<button class="btn btn-outline" onclick="navigate('payroll')">← Back</button>${draft?` <button class="btn btn-success" onclick="finalisePayRun('${run.id}')">Finalise pay run</button>`:''}${draft?` <button class="btn btn-danger" onclick="deletePayRun('${run.id}')">Delete</button>`:''}`);
+  c.innerHTML = `
+    <div class="card">
+      <div class="card-head">
+        <div><h2 style="margin:0">${periodLabel(run.period)} ${draft?'<span class="badge b-amber">Draft</span>':'<span class="badge b-green">Finalised</span>'}</h2><div class="small muted">Pay date: ${fmtDate(run.pay_date)}${run.finalised_at?` · Finalised ${fmtDate(run.finalised_at)}`:''}</div></div>
+      </div>
+      <div class="stat-grid">
+        <div class="stat"><div class="num">${slips.length}</div><div class="lbl">Payslips</div></div>
+        <div class="stat info"><div class="num">${fmtPay(gross)}</div><div class="lbl">Total gross</div></div>
+        <div class="stat warn"><div class="num">${fmtPay(ded)}</div><div class="lbl">Total deductions</div></div>
+        <div class="stat ok"><div class="num">${fmtPay(net)}</div><div class="lbl">Total net</div></div>
+        <div class="stat"><div class="num">${fmtPay(erNI)}</div><div class="lbl">Employers NI</div></div>
+        <div class="stat"><div class="num">${fmtPay(erPen)}</div><div class="lbl">Employers pension</div></div>
+      </div>
+    </div>
+    <div class="card"><div class="card-head"><h3>Payslips</h3></div>
+      <div class="table-wrap"><table><thead><tr><th>Employee</th><th>No.</th><th>Tax code</th><th>NI number</th><th>Gross</th><th>Deductions</th><th>Net</th><th></th></tr></thead><tbody>${
+        slips.map(p=>{ const e=empById(p.employee_id); return `<tr><td>${e?esc(e.first_name+' '+e.last_name):'—'}</td><td>${esc(p.personnel_number_at_pay)||'—'}</td><td>${esc(p.tax_code_at_pay)||'—'}</td><td>${esc(p.ni_number_at_pay)||'—'}</td><td>${fmtPay(p.gross_pay)}</td><td>${fmtPay(p.total_deductions)}</td><td><strong>${fmtPay(p.net_pay)}</strong></td><td style="text-align:right;white-space:nowrap">${draft?`<button class="btn btn-outline btn-sm" onclick="editPayslip('${p.id}')">Edit</button> `:''}<button class="btn btn-primary btn-sm" onclick="openPayslip('${p.id}')">View</button></td></tr>`; }).join('')
+      }</tbody></table></div>
+    </div>`;
+}
+async function finalisePayRun(id){
+  if (!confirm('Finalise this pay run? Payslips will be locked and visible to employees.')) return;
+  const run = await idbGet('pay_runs', id); run.status='finalised'; run.finalised_at = nowISO();
+  await idbPut('pay_runs', run);
+  await logAction('pay_run_finalise', { period:run.period, run_id:id });
+  toast('Pay run finalised');
+  navigate('pay-run');
+}
+async function deletePayRun(id){
+  const run = await idbGet('pay_runs', id);
+  if (run.status!=='draft'){ toast('Only draft runs can be deleted','error'); return; }
+  if (!confirm('Delete this draft pay run and all its payslips?')) return;
+  const slips = await idbByIndex('payslips','pay_run_id',id);
+  for (const p of slips) await idbDelete('payslips', p.id);
+  await idbDelete('pay_runs', id);
+  await logAction('pay_run_delete', { period:run.period, run_id:id });
+  toast('Pay run deleted');
+  navigate('payroll');
+}
+
+// ── Edit a payslip's line items ──
+async function editPayslip(payslipId){
+  const p = await idbGet('payslips', payslipId);
+  if (!p){ toast('Payslip not found','error'); return; }
+  const run = await idbGet('pay_runs', p.pay_run_id);
+  if (run.status!=='draft'){ toast('Finalised payslips can\'t be edited','error'); return; }
+  const components = await payComponentsSorted();
+  window._payslipDraft = JSON.parse(JSON.stringify(p));
+  window._payslipComponents = components;
+  renderPayslipEditor();
+}
+function renderPayslipEditor(){
+  const p = window._payslipDraft;
+  const components = window._payslipComponents;
+  const e = empById(p.employee_id);
+  const lineRow = (l, idx) => {
+    const c = components.find(x=>x.code===l.code);
+    const isHourly = c?.hourly;
+    return `<tr data-idx="${idx}">
+      <td><span class="badge ${l.category==='payment'?'b-blue':(l.category==='deduction'?'b-red':'b-grey')}">${l.category}</span></td>
+      <td>${esc(l.label)}</td>
+      <td><input type="number" step="0.01" value="${l.units??1}" oninput="updatePayslipLine(${idx},'units',this.value)" style="width:80px"></td>
+      <td><input type="number" step="0.01" value="${l.rate??0}" oninput="updatePayslipLine(${idx},'rate',this.value)" style="width:100px"></td>
+      <td><input type="number" step="0.01" value="${l.amount??0}" oninput="updatePayslipLine(${idx},'amount',this.value,true)" style="width:110px"></td>
+      <td><button type="button" class="btn btn-danger btn-sm" onclick="removePayslipLine(${idx})">×</button></td>
+    </tr>`;
+  };
+  const addOptions = components.map(c=>`<option value="${c.code}">${esc(c.label)} (${c.category})</option>`).join('');
+  const t = payslipTotals(p.lines);
+  openModal(`<h2>Edit payslip</h2>
+    <div class="modal-sub">${e?esc(e.first_name+' '+e.last_name):'—'} · ${periodLabel((window._payRunPeriod||''))}</div>
+    <div class="table-wrap"><table id="ps-lines"><thead><tr><th>Type</th><th>Description</th><th>Units</th><th>Rate</th><th>Amount</th><th></th></tr></thead><tbody>${
+      p.lines.map((l,i)=>lineRow(l,i)).join('')
+    }</tbody></table></div>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:end">
+      <div class="form-group" style="margin:0;flex:1;min-width:200px"><label>Add line</label><select id="ps-add">${addOptions}</select></div>
+      <button type="button" class="btn btn-outline" onclick="addPayslipLine()">+ Add</button>
+    </div>
+    <div style="display:flex;gap:16px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap">
+      <div><div class="small muted">Gross</div><div style="font-size:1.1rem;font-weight:700">${fmtPay(t.gross)}</div></div>
+      <div><div class="small muted">Deductions</div><div style="font-size:1.1rem;font-weight:700">${fmtPay(t.deductions)}</div></div>
+      <div><div class="small muted">Net</div><div style="font-size:1.3rem;font-weight:700;color:var(--success)">${fmtPay(t.net)}</div></div>
+    </div>
+    <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="button" class="btn btn-primary" onclick="savePayslipDraft()">Save changes</button></div>`, true);
+}
+function updatePayslipLine(idx, field, value, isAmount){
+  const p = window._payslipDraft;
+  const l = p.lines[idx]; if (!l) return;
+  l[field] = Number(value)||0;
+  if (!isAmount){
+    // recompute amount from units * rate
+    l.amount = toMoney((Number(l.units)||0) * (Number(l.rate)||0));
+    // reflect in the amount input
+    const tr = document.querySelector(`#ps-lines tr[data-idx="${idx}"]`);
+    if (tr){ const ai = tr.querySelectorAll('input')[2]; if (ai) ai.value = l.amount; }
+  }
+  // refresh totals area without full re-render
+  const t = payslipTotals(p.lines);
+  document.querySelectorAll('#modal .modal-actions').forEach(()=>{});
+  const totals = document.querySelectorAll('#modal > div[style*="justify-content:flex-end"] > div > div:nth-child(2)');
+  if (totals.length>=3){ totals[0].textContent=fmtPay(t.gross); totals[1].textContent=fmtPay(t.deductions); totals[2].textContent=fmtPay(t.net); }
+}
+function removePayslipLine(idx){
+  window._payslipDraft.lines.splice(idx,1);
+  renderPayslipEditor();
+}
+function addPayslipLine(){
+  const code = document.getElementById('ps-add').value;
+  const c = window._payslipComponents.find(x=>x.code===code); if (!c) return;
+  window._payslipDraft.lines.push({ code:c.code, label:c.label, category:c.category, units:1, rate: c.default_amount||0, amount: c.default_amount||0 });
+  renderPayslipEditor();
+}
+async function savePayslipDraft(){
+  const p = window._payslipDraft;
+  const t = payslipTotals(p.lines);
+  p.gross_pay = t.gross; p.total_deductions = t.deductions; p.net_pay = t.net; p.employer_ni = t.employer_ni; p.employer_pension = t.employer_pension; p.updated_at = nowISO();
+  await idbPut('payslips', p);
+  closeModal(); toast('Payslip saved');
+  navigate('pay-run');
+}
+
+// ── View a single payslip (printable) ──
+async function renderPayslip(c){
+  const id = window._payslipId;
+  if (!id){ navigate('payroll'); return; }
+  const p = await idbGet('payslips', id);
+  if (!p){ toast('Payslip not found','error'); navigate('payroll'); return; }
+  const run = await idbGet('pay_runs', p.pay_run_id);
+  const e = empById(p.employee_id);
+  // Permission check
+  const role = state.user.role;
+  if (role==='employee' && state.user.employee_id!==p.employee_id){ c.innerHTML='<div class="empty">You do not have access to this payslip.</div>'; return; }
+  if (role==='manager' && state.user.employee_id!==p.employee_id){ /* allow if their report */
+    const team = teamMemberIds();
+    if (!team.includes(p.employee_id)){ c.innerHTML='<div class="empty">You do not have access to this payslip.</div>'; return; }
+  }
+  // Employees/managers can only see finalised payslips
+  if (role!=='hr_admin' && run.status!=='finalised'){ c.innerHTML='<div class="empty">This payslip is not yet finalised.</div>'; return; }
+  const ytd = await ytdForEmployee(p.employee_id, run.period);
+  const monthNo = periodMonthNumber(run.period);
+  const backPage = role==='hr_admin' ? (window._payRunId?'pay-run':'payroll') : 'my-payslips';
+  setTopbar(`<button class="btn btn-outline" onclick="navigate('${backPage}')">← Back</button> <button class="btn btn-accent" onclick="window.print()">Print / Save as PDF</button>`);
+  const payments = p.lines.filter(l=>l.category==='payment');
+  const deductions = p.lines.filter(l=>l.category==='deduction');
+  const other = p.lines.filter(l=>l.category==='other');
+  const employer = [
+    { label:'Total Gross Pay', amount: p.gross_pay },
+    { label:'Gross for Tax', amount: p.gross_pay },
+    { label:'Earnings for NI', amount: p.gross_pay },
+    ...other.map(l=>({ label:l.label, amount:l.amount }))
+  ];
+  const ytdRows = [
+    { label:'Gross YTD', amount: ytd.gross },
+    { label:'Taxable YTD', amount: ytd.gross },
+    { label:'Tax YTD', amount: ytd.paye },
+    { label:'Earnings For NI TD', amount: ytd.gross },
+    { label:'NI YTD EE', amount: ytd.nic_ee },
+    { label:'Er Pension TD', amount: ytd.pension_er }
+  ];
+  const company = await getSetting('company_name','Komfort Partitioning Ltd');
+  c.innerHTML = `
+    <div class="payslip-print">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px;gap:20px">
+        <div>
+          <div style="font-weight:700">${e?esc((e.title?e.title+' ':'')+e.first_name[0]+'. '+e.last_name):'—'}</div>
+          <div>${esc(company)}</div>
+          <div>${esc(e?.site||'')}</div>
+          <div style="margin-top:8px;font-weight:700">${esc(p.personnel_number_at_pay)||''}</div>
+        </div>
+        <div style="text-align:right">
+          <img src="/logo.svg" alt="Komfort" style="height:50px"><br>
+          <div style="margin-top:18px;font-weight:700">Private &amp; Confidential</div>
+        </div>
+      </div>
+      <table style="width:100%;margin-bottom:10px;border-collapse:collapse">
+        <tr>
+          <td style="padding:4px 0"><strong>Personnel Number</strong></td><td>${esc(p.personnel_number_at_pay)||'—'}</td>
+          <td style="padding:4px 0"><strong>Employer</strong></td><td>${esc(company)}</td>
+        </tr>
+        <tr>
+          <td style="padding:4px 0"><strong>Personnel Name</strong></td><td>${e?esc((e.title?e.title+' ':'')+e.first_name[0]+'. '+e.last_name):'—'}</td>
+          <td style="padding:4px 0"><strong>Tax Office Reference</strong></td><td>${esc(await getSetting('tax_office_ref','—'))}</td>
+        </tr>
+        <tr>
+          <td></td><td></td>
+          <td style="padding:4px 0"><strong>NI Number</strong></td><td>${esc(p.ni_number_at_pay)||'—'}</td>
+        </tr>
+      </table>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border:1px solid #404042">
+        <div style="border-right:1px solid #404042">
+          <div style="background:#f4f6f7;padding:6px 10px;text-align:center;font-weight:700;border-bottom:1px solid #404042">Payments</div>
+          <table style="width:100%;border-collapse:collapse">
+            <thead><tr style="border-bottom:1px solid #404042"><th style="text-align:left;padding:6px 10px">Description</th><th style="text-align:right;padding:6px 10px">Hours/Rate</th><th style="text-align:right;padding:6px 10px">Amount</th></tr></thead>
+            <tbody>${payments.map(l=>`<tr><td style="padding:4px 10px">${esc(l.label)}</td><td style="padding:4px 10px;text-align:right">${l.units!=null?fmtPayPlain(l.units):''} ${l.rate?fmtPayPlain(l.rate):''}</td><td style="padding:4px 10px;text-align:right">${fmtPayPlain(l.amount)}</td></tr>`).join('')}
+            <tr style="border-top:1px solid #404042"><td style="padding:6px 10px;font-weight:700">Total Payments</td><td></td><td style="padding:6px 10px;text-align:right;font-weight:700">${fmtPayPlain(p.gross_pay)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="border-right:1px solid #404042">
+          <div style="background:#f4f6f7;padding:6px 10px;text-align:center;font-weight:700;border-bottom:1px solid #404042">Deductions</div>
+          <table style="width:100%;border-collapse:collapse">
+            <thead><tr style="border-bottom:1px solid #404042"><th style="text-align:left;padding:6px 10px">Description</th><th style="text-align:right;padding:6px 10px">Amount</th></tr></thead>
+            <tbody>${deductions.map(l=>`<tr><td style="padding:4px 10px">${esc(l.label)}</td><td style="padding:4px 10px;text-align:right">${fmtPayPlain(l.amount)}</td></tr>`).join('')}
+            <tr style="border-top:1px solid #404042"><td style="padding:6px 10px;font-weight:700">Total Deductions</td><td style="padding:6px 10px;text-align:right;font-weight:700">${fmtPayPlain(p.total_deductions)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <div style="background:#f4f6f7;padding:6px 10px;text-align:center;font-weight:700;border-bottom:1px solid #404042">Period totals</div>
+          <table style="width:100%;border-collapse:collapse">
+            <tbody>${employer.map(r=>`<tr><td style="padding:4px 10px">${esc(r.label)}</td><td style="padding:4px 10px;text-align:right">${fmtPayPlain(r.amount)}</td></tr>`).join('')}</tbody>
+          </table>
+          <div style="background:#f4f6f7;padding:6px 10px;text-align:center;font-weight:700;border-top:1px solid #404042;border-bottom:1px solid #404042">Year to date</div>
+          <table style="width:100%;border-collapse:collapse">
+            <tbody>${ytdRows.map(r=>`<tr><td style="padding:4px 10px">${esc(r.label)}</td><td style="padding:4px 10px;text-align:right">${fmtPayPlain(r.amount)}</td></tr>`).join('')}</tbody>
+          </table>
+        </div>
+      </div>
+      <table style="width:100%;margin-top:0;border:1px solid #404042;border-top:none;border-collapse:collapse">
+        <tr>
+          <td style="padding:8px 10px"><strong>MONTH</strong> ${monthNo}</td>
+          <td style="padding:8px 10px"><strong>DATE</strong> ${fmtDate(run.pay_date)}</td>
+          <td style="padding:8px 10px"><strong>DEPT.</strong> ${esc(e?.department||'')}</td>
+          <td style="padding:8px 10px"><strong>PAY TYPE</strong> BACS</td>
+          <td style="padding:8px 10px"><strong>TAX CODE</strong> ${esc(p.tax_code_at_pay)||'—'}</td>
+          <td style="padding:8px 10px;text-align:right;background:#404042;color:var(--accent)"><strong>NET PAY</strong> ${fmtPayPlain(p.net_pay)}</td>
+        </tr>
+      </table>
+    </div>`;
+}
+
+// ── Self-service: My Payslips ──
+async function renderMyPayslips(c){
+  const empId = state.user.employee_id;
+  if (!empId){ c.innerHTML='<div class="empty">No employee record linked to your account.</div>'; return; }
+  const slips = await idbByIndex('payslips','employee_id',empId);
+  const runs = await idbGetAll('pay_runs');
+  const runMap = Object.fromEntries(runs.map(r=>[r.id,r]));
+  const visible = slips.filter(p=>runMap[p.pay_run_id]?.status==='finalised').sort((a,b)=>(runMap[b.pay_run_id]?.period||'').localeCompare(runMap[a.pay_run_id]?.period||''));
+  const ytd = await ytdForEmployee(empId);
+  c.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat"><div class="num">${fmtPay(ytd.gross)}</div><div class="lbl">Gross YTD (${ytd.bounds.label})</div></div>
+      <div class="stat warn"><div class="num">${fmtPay(ytd.paye)}</div><div class="lbl">PAYE YTD</div></div>
+      <div class="stat warn"><div class="num">${fmtPay(ytd.nic_ee)}</div><div class="lbl">Employee NIC YTD</div></div>
+    </div>
+    <div class="card"><div class="card-head"><h3>My payslips</h3></div>
+      ${visible.length?`<div class="table-wrap"><table><thead><tr><th>Period</th><th>Pay date</th><th>Gross</th><th>Deductions</th><th>Net</th><th></th></tr></thead><tbody>${
+        visible.map(p=>{ const r=runMap[p.pay_run_id]; return `<tr class="clickable" onclick="openPayslip('${p.id}')"><td>${periodLabel(r.period)}</td><td>${fmtDate(r.pay_date)}</td><td>${fmtPay(p.gross_pay)}</td><td>${fmtPay(p.total_deductions)}</td><td><strong>${fmtPay(p.net_pay)}</strong></td><td style="text-align:right"><button class="btn btn-primary btn-sm" onclick="event.stopPropagation();openPayslip('${p.id}')">View / PDF</button></td></tr>`; }).join('')
+      }</tbody></table></div>`:'<div class="empty small">No payslips available yet.</div>'}
+    </div>`;
+}
+
+// ── Pay components admin ──
+async function renderPayComponents(c){
+  const components = (await idbGetAll('pay_components')).sort((a,b)=>(a.display_order||0)-(b.display_order||0));
+  setTopbar(`<button class="btn btn-outline" onclick="navigate('payroll')">← Back to payroll</button> <button class="btn btn-accent" onclick="payComponentForm()">+ Add component</button>`);
+  c.innerHTML = `
+    <div class="card"><div class="card-head"><h3>Pay components</h3></div>
+      <p class="small muted">Components used on payslips. Disable a component to keep historical payslips intact but hide it from new ones.</p>
+      <div class="table-wrap"><table><thead><tr><th>Order</th><th>Code</th><th>Label</th><th>Category</th><th>Recurring</th><th>Default</th><th>Enabled</th><th></th></tr></thead><tbody>${
+        components.map(c=>`<tr><td>${c.display_order||0}</td><td><code>${esc(c.code)}</code></td><td>${esc(c.label)}</td><td><span class="badge ${c.category==='payment'?'b-blue':(c.category==='deduction'?'b-red':'b-grey')}">${c.category}</span></td><td>${c.recurring?'Yes':'No'}</td><td>${c.default_amount?fmtPay(c.default_amount):'—'}</td><td>${c.enabled?'<span class="badge b-green">Enabled</span>':'<span class="badge b-grey">Disabled</span>'}</td><td style="text-align:right;white-space:nowrap"><button class="btn btn-outline btn-sm" onclick="payComponentForm('${c.id}')">Edit</button>${c.system?'':` <button class="btn btn-danger btn-sm" onclick="deletePayComponent('${c.id}')">×</button>`}</td></tr>`).join('')
+      }</tbody></table></div>
+    </div>`;
+}
+async function payComponentForm(id){
+  const all = await idbGetAll('pay_components');
+  const c = id ? all.find(x=>x.id===id) : { display_order: (all.reduce((m,x)=>Math.max(m,x.display_order||0),0))+10, category:'payment', enabled:true, recurring:false, default_amount:0 };
+  openModal(`<h2>${id?'Edit':'Add'} pay component</h2>
+    <form onsubmit="savePayComponent(event,'${id||''}')">
+      <div class="form-row">
+        <div class="form-group"><label class="req">Code</label><input id="pc-code" value="${esc(c.code||'')}" ${id&&c.system?'readonly':''} required placeholder="e.g. travel_allowance"></div>
+        <div class="form-group"><label class="req">Label</label><input id="pc-label" value="${esc(c.label||'')}" required></div>
+      </div>
+      <div class="form-row-3">
+        <div class="form-group"><label>Category</label><select id="pc-cat" ${id&&c.system?'disabled':''}><option value="payment" ${c.category==='payment'?'selected':''}>Payment</option><option value="deduction" ${c.category==='deduction'?'selected':''}>Deduction</option><option value="other" ${c.category==='other'?'selected':''}>Other (employer cost)</option></select></div>
+        <div class="form-group"><label>Display order</label><input id="pc-order" type="number" value="${c.display_order||0}"></div>
+        <div class="form-group"><label>Default amount (£)</label><input id="pc-default" type="number" step="0.01" value="${c.default_amount||0}"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Recurring (auto-added to every payslip)</label><select id="pc-recurring"><option value="false" ${!c.recurring?'selected':''}>No</option><option value="true" ${c.recurring?'selected':''}>Yes</option></select></div>
+        <div class="form-group"><label>Enabled</label><select id="pc-enabled"><option value="true" ${c.enabled!==false?'selected':''}>Yes</option><option value="false" ${c.enabled===false?'selected':''}>No</option></select></div>
+      </div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
+    </form>`);
+}
+async function savePayComponent(ev, id){
+  ev.preventDefault();
+  const all = await idbGetAll('pay_components');
+  const existing = id ? all.find(x=>x.id===id) : null;
+  const code = val('pc-code');
+  if (!id && all.some(x=>x.code===code)){ toast('A component with that code already exists','error'); return; }
+  const rec = {
+    id: id||uuid(),
+    code,
+    label: val('pc-label'),
+    category: existing?.system ? existing.category : val('pc-cat'),
+    display_order: Number(val('pc-order'))||0,
+    default_amount: Number(val('pc-default'))||0,
+    recurring: val('pc-recurring')==='true',
+    enabled: val('pc-enabled')==='true',
+    system: existing?.system||false,
+    computed: existing?.computed,
+    hourly: existing?.hourly
+  };
+  await idbPut('pay_components', rec);
+  closeModal(); toast('Component saved'); navigate('pay-components');
+}
+async function deletePayComponent(id){
+  const c = (await idbGetAll('pay_components')).find(x=>x.id===id);
+  if (c?.system){ toast('System components can only be disabled','error'); return; }
+  if (!confirm('Delete this pay component? Existing payslips already using it will be unaffected.')) return;
+  await idbDelete('pay_components', id);
+  toast('Deleted'); navigate('pay-components');
+}
 
 // ═══════════════════════════════════════════════
 // USER ACCOUNTS (HR admin)
@@ -1859,6 +2388,7 @@ async function saveMyPassword(ev){
 (async function init(){
   await openDB();
   await seedDefaults();
+  await seedPayComponentsIfEmpty();
   const sid = sessionStorage.getItem('hr_session');
   if (sid){ const u = await idbGet('users', sid); if (u){ state.user = u; await enterApp(); return; } }
 })();
