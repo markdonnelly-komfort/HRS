@@ -260,8 +260,8 @@
 // backend later without changing the data shape.
 // ═══════════════════════════════════════════════════════════════
 const DB_NAME = 'KomfortHR';
-const DB_VERSION = 2;
-const STORES = ['users','employees','contacts','documents','leave','reviews','objectives','tasks','audit_log','settings','pay_components','pay_runs','payslips'];
+const DB_VERSION = 3;
+const STORES = ['users','employees','contacts','documents','leave','reviews','objectives','tasks','audit_log','settings','pay_components','pay_runs','payslips','recurring_deductions'];
 let db = null;
 
 function openDB() {
@@ -326,6 +326,10 @@ function openDB() {
       if (!d.objectStoreNames.contains('payslips')) {
         const s = d.createObjectStore('payslips', { keyPath: 'id' });
         s.createIndex('pay_run_id', 'pay_run_id');
+        s.createIndex('employee_id', 'employee_id');
+      }
+      if (!d.objectStoreNames.contains('recurring_deductions')) {
+        const s = d.createObjectStore('recurring_deductions', { keyPath: 'id' });
         s.createIndex('employee_id', 'employee_id');
       }
     };
@@ -407,6 +411,7 @@ async function seedDefaults(){
     pension_sacrifice_pct: o.pensac ?? 5,
     employer_pension_pct: o.erpen ?? 8,
     p45_tax_year: o.p45yr || '', p45_pay_to_date: o.p45pay ?? null, p45_tax_to_date: o.p45tax ?? null, p45_employer_paye_ref: o.p45ref || '',
+    student_loan_plan: o.slplan || 'none', has_pg_loan: o.pgl===true,
     holiday_allowance:o.hol||DEFAULT_ALLOWANCE,
     photo:null, notes:'', created_at:nowISO(), updated_at:nowISO()
   });
@@ -1011,9 +1016,10 @@ async function saveTaxCodeChange(ev, empId){
   closeModal(); toast('Tax code updated');
   refreshEmpTab();
 }
-function empTabEmployment(body, id){
+async function empTabEmployment(body, id){
   const e = empById(id);
   const showSalary = state.user.role==='hr_admin';
+  const deductionsCard = showSalary ? await recurringDeductionsCard(id) : '';
   body.innerHTML = `<div class="card"><dl class="kv">
     <dt>Employee number</dt><dd>${esc(e.employee_number)}</dd>
     <dt>Job title</dt><dd>${esc(e.job_title)}</dd>
@@ -1035,11 +1041,61 @@ function empTabEmployment(body, id){
     <dt>Employer pension</dt><dd>${e.employer_pension_pct?Number(e.employer_pension_pct).toFixed(1)+'% of basic':'—'}</dd>
     <dt>Bank sort code</dt><dd>${esc(e.bank_sort_code)||'—'}</dd>
     <dt>Bank account</dt><dd>${esc(e.bank_account)||'—'}</dd>
-    ${e.p45_tax_year?`<dt>P45 (prev. employment)</dt><dd>${esc(e.p45_tax_year)} · Pay ${fmtMoney(e.p45_pay_to_date)} · Tax ${fmtMoney(e.p45_tax_to_date)}${e.p45_employer_paye_ref?' · Ref '+esc(e.p45_employer_paye_ref):''}</dd>`:''}`:''}
+    ${e.p45_tax_year?`<dt>P45 (prev. employment)</dt><dd>${esc(e.p45_tax_year)} · Pay ${fmtMoney(e.p45_pay_to_date)} · Tax ${fmtMoney(e.p45_tax_to_date)}${e.p45_employer_paye_ref?' · Ref '+esc(e.p45_employer_paye_ref):''}</dd>`:''}
+    <dt>Student loan</dt><dd>${({none:'None',plan1:'Plan 1',plan2:'Plan 2',plan4:'Plan 4',plan5:'Plan 5'})[e.student_loan_plan]||'None'}${e.has_pg_loan?' + Postgraduate loan':''}</dd>`:''}
     <dt>Holiday allowance</dt><dd>${e.holiday_allowance} days/yr</dd>
     <dt>Notes</dt><dd>${esc(e.notes)||'—'}</dd>
-  </dl></div>`;
+  </dl></div>${deductionsCard}`;
 }
+// Card listing attachments of earnings + loans/advances for an employee.
+async function recurringDeductionsCard(empId){
+  const recs = (await idbByIndex('recurring_deductions','employee_id',empId)).sort((a,b)=>(a.created_at||'').localeCompare(b.created_at||''));
+  const rows = recs.map(d => {
+    const kind = d.kind==='loan' ? 'Loan / advance' : 'Attachment of earnings';
+    const bal = d.balance==null ? 'Open-ended' : fmtMoney(d.balance);
+    return `<tr${d.active===false?' style="opacity:.5"':''}><td>${kind}</td><td>${esc(d.description||d.reference||'—')}</td><td>${fmtMoney(d.amount)}/mo</td><td>${bal}</td><td>${d.active===false?'<span class="badge b-grey">Closed</span>':'<span class="badge b-green">Active</span>'}</td><td style="text-align:right;white-space:nowrap"><button class="btn btn-outline btn-sm" onclick="recurringDeductionForm('${empId}','${d.id}')">Edit</button> <button class="btn btn-danger btn-sm" onclick="deleteRecurringDeduction('${d.id}','${empId}')">×</button></td></tr>`;
+  }).join('');
+  return `<div class="card"><div class="card-head"><h3>Attachments, loans & advances</h3><button class="btn btn-accent btn-sm" onclick="recurringDeductionForm('${empId}')">+ Add</button></div>
+    <p class="small muted" style="margin-bottom:10px">Recurring post-tax deductions applied automatically each pay run. Loans/advances with a balance stop once repaid; leave the balance blank for an open-ended attachment.</p>
+    ${recs.length?`<div class="table-wrap"><table><thead><tr><th>Type</th><th>Description / ref</th><th>Per month</th><th>Balance</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty small">None.</div>'}
+  </div>`;
+}
+function recurringDeductionForm(empId, recId){
+  idbGetAll('recurring_deductions').then(all=>{
+    const d = recId ? all.find(x=>x.id===recId) : { kind:'attachment', amount:0, balance:null, active:true };
+    openModal(`<h2>${recId?'Edit':'Add'} deduction</h2><div class="modal-sub">${esc(empName(empId))}</div>
+      <form onsubmit="saveRecurringDeduction(event,'${empId}','${recId||''}')">
+        <div class="form-row">
+          <div class="form-group"><label>Type</label><select id="rd-kind"><option value="attachment" ${d.kind==='attachment'?'selected':''}>Attachment of earnings</option><option value="loan" ${d.kind==='loan'?'selected':''}>Loan / advance</option></select></div>
+          <div class="form-group"><label>Status</label><select id="rd-active"><option value="true" ${d.active!==false?'selected':''}>Active</option><option value="false" ${d.active===false?'selected':''}>Closed</option></select></div>
+        </div>
+        <div class="form-group"><label>Description</label><input id="rd-desc" value="${esc(d.description||'')}" placeholder="e.g. Council tax AEO / Season ticket loan"></div>
+        <div class="form-group"><label>Reference (optional)</label><input id="rd-ref" value="${esc(d.reference||'')}"></div>
+        <div class="form-row">
+          <div class="form-group"><label class="req">Amount per month (£)</label><input id="rd-amount" type="number" step="0.01" value="${d.amount||0}" required></div>
+          <div class="form-group"><label>Balance remaining (£)</label><input id="rd-balance" type="number" step="0.01" value="${d.balance==null?'':d.balance}" placeholder="blank = open-ended"><div class="small muted">For loans/advances; reduces each run and auto-closes at £0.</div></div>
+        </div>
+        <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
+      </form>`);
+  });
+}
+async function saveRecurringDeduction(ev, empId, recId){
+  ev.preventDefault();
+  const all = await idbGetAll('recurring_deductions');
+  const existing = recId ? all.find(x=>x.id===recId) : null;
+  const balStr = val('rd-balance');
+  await idbPut('recurring_deductions', {
+    id: recId||uuid(), employee_id: empId,
+    kind: val('rd-kind'), description: val('rd-desc'), reference: val('rd-ref'),
+    amount: Number(val('rd-amount'))||0,
+    balance: balStr===''? null : Number(balStr),
+    active: val('rd-active')==='true',
+    created_at: existing?.created_at || nowISO()
+  });
+  await logAction('recurring_deduction_save', { employee_id:empId });
+  closeModal(); toast('Deduction saved'); refreshEmpTab();
+}
+async function deleteRecurringDeduction(id, empId){ if(!confirm('Delete this deduction?'))return; await idbDelete('recurring_deductions',id); toast('Deleted'); refreshEmpTab(); }
 async function empTabContacts(body, id){
   const contacts = await idbByIndex('contacts','employee_id',id);
   const canEdit = state.user.role==='hr_admin';
@@ -1198,6 +1254,10 @@ function employeeForm(id){
           <div class="form-group"><label>Salary sacrifice – pension (% of basic)</label><input id="f-pen-sac-pct" type="number" step="0.1" value="${e.pension_sacrifice_pct??5}"></div>
           <div class="form-group"><label>Employer pension (% of basic)</label><input id="f-er-pen-pct" type="number" step="0.1" value="${e.employer_pension_pct??8}"></div>
         </div>
+        <div class="form-row">
+          <div class="form-group"><label>Student loan plan</label><select id="f-sl-plan">${[['none','None'],['plan1','Plan 1'],['plan2','Plan 2'],['plan4','Plan 4'],['plan5','Plan 5']].map(([v,l])=>`<option value="${v}" ${(e.student_loan_plan||'none')===v?'selected':''}>${l}</option>`).join('')}</select></div>
+          <div class="form-group"><label>Postgraduate loan</label><select id="f-pgl"><option value="false" ${!e.has_pg_loan?'selected':''}>No</option><option value="true" ${e.has_pg_loan?'selected':''}>Yes</option></select></div>
+        </div>
       </fieldset>
       <fieldset><legend>P45 — previous employment (this tax year)</legend>
         <p class="small muted" style="margin:-4px 0 12px">For mid-year starters on a cumulative tax code. Pay/tax to date carry into the cumulative PAYE calculation when the tax year matches.</p>
@@ -1242,6 +1302,7 @@ async function saveEmployee(ev, id){
     employer_pension_pct: Number(val('f-er-pen-pct'))||0,
     p45_tax_year: val('f-p45-yr'), p45_employer_paye_ref: val('f-p45-ref'),
     p45_pay_to_date: numVal('f-p45-pay'), p45_tax_to_date: numVal('f-p45-tax'),
+    student_loan_plan: val('f-sl-plan'), has_pg_loan: val('f-pgl')==='true',
     holiday_allowance: numVal('f-hol') ?? DEFAULT_ALLOWANCE,
     photo, notes: val('f-notes'),
     created_at: existing?.created_at || nowISO(), updated_at: nowISO()
@@ -1764,12 +1825,22 @@ const DEFAULT_PAY_COMPONENTS = [
   { code:'back_pay',          label:'Back Pay',                   category:'payment',   recurring:false, default_amount:0,  display_order:35, enabled:true, value_type:'fixed', system:true },
   { code:'pension_sacrifice', label:'Salary Sacrifice (Pension)', category:'payment',   recurring:false, default_amount:0,  display_order:40, enabled:true, value_type:'calculated', system:true },
   { code:'car_sacrifice',     label:'Salary Sacrifice (Car)',     category:'payment',   recurring:false, default_amount:0,  display_order:41, enabled:true, value_type:'employee_linked', linked_field:'car_sacrifice_monthly', system:true },
+  // Statutory pay (payments — taxable & NICable). Added via the statutory calculator.
+  { code:'ssp',               label:'Statutory Sick Pay',         category:'payment',   recurring:false, default_amount:0,  display_order:36, enabled:true, value_type:'fixed', system:true },
+  { code:'smp',               label:'Statutory Maternity Pay',    category:'payment',   recurring:false, default_amount:0,  display_order:37, enabled:true, value_type:'fixed', system:true },
+  { code:'spp',               label:'Statutory Paternity Pay',    category:'payment',   recurring:false, default_amount:0,  display_order:38, enabled:true, value_type:'fixed', system:true },
+  { code:'sap',               label:'Statutory Adoption Pay',     category:'payment',   recurring:false, default_amount:0,  display_order:39, enabled:true, value_type:'fixed', system:true },
+  { code:'advance',           label:'Advance / Loan paid',        category:'payment',   recurring:false, default_amount:0,  display_order:42, enabled:true, value_type:'fixed', system:true },
   { code:'paye',              label:'PAYE',                       category:'deduction', recurring:false, default_amount:0,  display_order:50, enabled:true, value_type:'calculated', system:true },
   { code:'nic_ee',            label:"Employees NIC",              category:'deduction', recurring:false, default_amount:0,  display_order:51, enabled:true, value_type:'calculated', system:true },
+  { code:'student_loan',      label:'Student Loan',               category:'deduction', recurring:false, default_amount:0,  display_order:52, enabled:true, value_type:'calculated', system:true },
+  { code:'pg_loan',           label:'Postgraduate Loan',          category:'deduction', recurring:false, default_amount:0,  display_order:53, enabled:true, value_type:'calculated', system:true },
+  { code:'attachment',        label:'Attachment of Earnings',     category:'deduction', recurring:false, default_amount:0,  display_order:54, enabled:true, value_type:'calculated', system:true },
+  { code:'loan_repayment',    label:'Loan Repayment',             category:'deduction', recurring:false, default_amount:0,  display_order:55, enabled:true, value_type:'calculated', system:true },
   { code:'pension_er',        label:'Employers Pension',          category:'other',     recurring:false, default_amount:0,  display_order:60, enabled:true, value_type:'calculated', system:true },
   { code:'ni_er',             label:'Employers NI',               category:'other',     recurring:false, default_amount:0,  display_order:61, enabled:true, value_type:'calculated', system:true }
 ];
-const LOCKED_CODES = ['paye','nic_ee','ni_er','pension_sacrifice','pension_er'];
+const LOCKED_CODES = ['paye','nic_ee','ni_er','pension_sacrifice','pension_er','student_loan','pg_loan','attachment','loan_repayment'];
 function isLockedComponent(code){ return LOCKED_CODES.includes(code); }
 function isHourlyMultiplierCode(code){ return ['ot_x1','ot_x1_5','ot_x2'].includes(code); }
 async function seedPayComponentsIfEmpty(){
@@ -1916,6 +1987,21 @@ async function getPayrollSettings(){
     nicEr: {
       stMonthly: await g('nic_er_st_monthly', 417),       // ≈ Secondary Threshold (2025/26 reduced)
       ratePct:   await g('nic_er_rate_pct', 15)
+    },
+    // Student / postgraduate loans — annual thresholds, deducted on earnings above
+    // the monthly equivalent (threshold/12), rounded DOWN to whole £ (HMRC).
+    studentLoan: {
+      plan1: { annual: await g('sl_plan1_annual', 26065), pct: await g('sl_plan1_pct', 9) },
+      plan2: { annual: await g('sl_plan2_annual', 28470), pct: await g('sl_plan2_pct', 9) },
+      plan4: { annual: await g('sl_plan4_annual', 32745), pct: await g('sl_plan4_pct', 9) },
+      plan5: { annual: await g('sl_plan5_annual', 25000), pct: await g('sl_plan5_pct', 9) },
+      pgl:   { annual: await g('sl_pgl_annual',   21000), pct: await g('sl_pgl_pct',   6) }
+    },
+    // Statutory pay weekly rates (2025/26 defaults).
+    statutory: {
+      sspWeekly:     await g('stat_ssp_weekly', 118.75),
+      familyWeekly:  await g('stat_family_weekly', 187.18),  // SMP/SPP/SAP standard weekly rate
+      familyHigherPct: await g('stat_family_higher_pct', 90) // first 6 weeks SMP/SAP
     }
   };
 }
@@ -2032,6 +2118,33 @@ function calcNicEr(grossMonthly, s){
   if (grossMonthly <= st) return 0;
   return toMoney((grossMonthly - st) * s.nicEr.ratePct/100);
 }
+// Student loan: 'none'|'plan1'|'plan2'|'plan4'|'plan5'. Monthly deduction on
+// earnings above the monthly threshold, rounded DOWN to whole £ (HMRC rule).
+function calcStudentLoan(grossMonthly, plan, s){
+  if (!plan || plan==='none') return 0;
+  const cfg = s.studentLoan[plan]; if (!cfg) return 0;
+  const monthlyThreshold = cfg.annual/12;
+  if (grossMonthly <= monthlyThreshold) return 0;
+  return Math.floor((grossMonthly - monthlyThreshold) * cfg.pct/100);
+}
+function calcPgLoan(grossMonthly, hasPgl, s){
+  if (!hasPgl) return 0;
+  const cfg = s.studentLoan.pgl;
+  const monthlyThreshold = cfg.annual/12;
+  if (grossMonthly <= monthlyThreshold) return 0;
+  return Math.floor((grossMonthly - monthlyThreshold) * cfg.pct/100);
+}
+// Active recurring deductions (attachments of earnings, loans) for an employee,
+// each capped at any remaining balance.
+async function activeRecurringDeductions(employeeId){
+  const all = await idbByIndex('recurring_deductions','employee_id',employeeId);
+  return all.filter(d => d.active !== false).map(d => {
+    const bal = (d.balance==null) ? null : Number(d.balance);
+    let amount = Number(d.amount)||0;
+    if (bal != null) amount = Math.min(amount, Math.max(0, bal));
+    return { ...d, applyAmount: toMoney(amount) };
+  }).filter(d => d.applyAmount > 0 || (d.balance==null && (Number(d.amount)||0)>0));
+}
 // ── Pro-rata / back-pay engine (weekday-based) ───────────────────────
 // Calendar-month bounds (as YYYY-MM-DD strings) for a 'YYYY-MM' period.
 function periodMonthBounds(period){
@@ -2139,15 +2252,35 @@ async function buildCalculatedLines(emp, settings, ctx){
 
   const grossTaxable = toMoney(lines.filter(l=>l.category==='payment').reduce((a,l)=>a+l.amount,0));
   const payeCtx = ctx || { m1: !!emp.tax_code_m1 };
-  const paye   = calcPAYE(grossTaxable, emp.tax_code||'1257L', settings, payeCtx);
-  const nicEe  = calcNicEe(grossTaxable, settings);
-  const nicEr  = calcNicEr(grossTaxable, settings);
-
-  lines.push({ code:'paye',        label:'PAYE',              category:'deduction', units:1, rate:paye,   amount:paye });
-  lines.push({ code:'nic_ee',      label:'Employees NIC',     category:'deduction', units:1, rate:nicEe,  amount:nicEe });
-  if (erPension) lines.push({ code:'pension_er', label:'Employers Pension', category:'other', units:1, rate:erPension, amount:erPension });
-  lines.push({ code:'ni_er',       label:'Employers NI',      category:'other',     units:1, rate:nicEr,  amount:nicEr });
+  lines.push(...await buildStatutoryLines(emp, grossTaxable, basic, settings, payeCtx));
   return lines;
+}
+// Codes the engine owns and recomputes (never hand-edited and stripped on recalc).
+const CALC_CODES = ['paye','nic_ee','ni_er','pension_er','pension_sacrifice','student_loan','pg_loan','attachment','loan_repayment'];
+// Build the calculated deduction + employer lines for a given taxable gross.
+async function buildStatutoryLines(emp, grossTaxable, basic, settings, payeCtx){
+  const paye  = calcPAYE(grossTaxable, emp.tax_code||'1257L', settings, payeCtx);
+  const nicEe = calcNicEe(grossTaxable, settings);
+  const nicEr = calcNicEr(grossTaxable, settings);
+  const sl    = calcStudentLoan(grossTaxable, emp.student_loan_plan, settings);
+  const pgl   = calcPgLoan(grossTaxable, emp.has_pg_loan, settings);
+  const erPension = toMoney(Number(basic) * (Number(emp.employer_pension_pct)||0)/100);
+  const out = [];
+  out.push({ code:'paye',   label:'PAYE',          category:'deduction', units:1, rate:paye,  amount:paye });
+  out.push({ code:'nic_ee', label:'Employees NIC', category:'deduction', units:1, rate:nicEe, amount:nicEe });
+  if (sl > 0)  out.push({ code:'student_loan', label:'Student Loan',       category:'deduction', units:1, rate:sl,  amount:sl });
+  if (pgl > 0) out.push({ code:'pg_loan',      label:'Postgraduate Loan',  category:'deduction', units:1, rate:pgl, amount:pgl });
+  // Attachments of earnings & loan/advance repayments (from recurring records).
+  for (const d of await activeRecurringDeductions(emp.id)){
+    if (d.kind === 'loan'){
+      out.push({ code:'loan_repayment', label:'Loan Repayment'+(d.description?' – '+d.description:''), category:'deduction', units:1, rate:d.applyAmount, amount:d.applyAmount, source_id:d.id });
+    } else {
+      out.push({ code:'attachment', label:'Attachment of Earnings'+(d.reference?' ('+d.reference+')':''), category:'deduction', units:1, rate:d.applyAmount, amount:d.applyAmount, source_id:d.id });
+    }
+  }
+  if (erPension > 0) out.push({ code:'pension_er', label:'Employers Pension', category:'other', units:1, rate:erPension, amount:erPension });
+  out.push({ code:'ni_er', label:'Employers NI', category:'other', units:1, rate:nicEr, amount:nicEr });
+  return out;
 }
 // Recompute the locked / calculated lines (pension sacrifice, PAYE, NIC, employer
 // items) based on the current payment lines. Manual one-offs (overtime, first aid,
@@ -2159,17 +2292,11 @@ async function recomputeStatutoryLines(emp, payLines, settings, ctx){
   const penSac = toMoney(basic * (Number(emp.pension_sacrifice_pct)||0)/100);
   const erPension = toMoney(basic * (Number(emp.employer_pension_pct)||0)/100);
   // Strip every line we will recompute, keep user-edited payments untouched.
-  const kept = payLines.filter(l => !['paye','nic_ee','ni_er','pension_er','pension_sacrifice'].includes(l.code));
+  const kept = payLines.filter(l => !CALC_CODES.includes(l.code));
   if (penSac > 0) kept.push({ code:'pension_sacrifice', label:'Salary Sacrifice (Pension)', category:'payment', units:1, rate:-penSac, amount:-penSac });
   const grossTaxable = toMoney(kept.filter(l => l.category==='payment').reduce((a,l)=>a+(Number(l.amount)||0), 0));
   const payeCtx = ctx || { m1: !!emp.tax_code_m1 };
-  const paye   = calcPAYE(grossTaxable, emp.tax_code||'1257L', settings, payeCtx);
-  const nicEe  = calcNicEe(grossTaxable, settings);
-  const nicEr  = calcNicEr(grossTaxable, settings);
-  kept.push({ code:'paye',   label:'PAYE',          category:'deduction', units:1, rate:paye,  amount:paye });
-  kept.push({ code:'nic_ee', label:'Employees NIC', category:'deduction', units:1, rate:nicEe, amount:nicEe });
-  if (erPension > 0) kept.push({ code:'pension_er', label:'Employers Pension', category:'other', units:1, rate:erPension, amount:erPension });
-  kept.push({ code:'ni_er', label:'Employers NI', category:'other', units:1, rate:nicEr, amount:nicEr });
+  kept.push(...await buildStatutoryLines(emp, grossTaxable, basic, settings, payeCtx));
   return kept;
 }
 
@@ -2263,7 +2390,7 @@ async function renderPayRun(c){
   const erNI = slips.reduce((a,p)=>a+(Number(p.employer_ni)||0),0);
   const erPen = slips.reduce((a,p)=>a+(Number(p.employer_pension)||0),0);
   const draft = run.status==='draft';
-  setTopbar(`<button class="btn btn-outline" onclick="navigate('payroll')">← Back</button>${draft?` <button class="btn btn-warning" onclick="recalcAllInPayRun('${run.id}')">Recalculate tax & NI</button>`:''}${draft?` <button class="btn btn-success" onclick="finalisePayRun('${run.id}')">Finalise pay run</button>`:''}${draft?` <button class="btn btn-danger" onclick="deletePayRun('${run.id}')">Delete</button>`:''}`);
+  setTopbar(`<button class="btn btn-outline" onclick="navigate('payroll')">← Back</button>${draft?` <button class="btn btn-outline" onclick="noteToAllForm('${run.id}')">Note to all</button>`:''}${draft?` <button class="btn btn-warning" onclick="recalcAllInPayRun('${run.id}')">Recalculate tax & NI</button>`:''}${draft?` <button class="btn btn-success" onclick="finalisePayRun('${run.id}')">Finalise pay run</button>`:''}${draft?` <button class="btn btn-danger" onclick="deletePayRun('${run.id}')">Delete</button>`:''}`);
   c.innerHTML = `
     <div class="card">
       <div class="card-head">
@@ -2298,6 +2425,18 @@ async function finalisePayRun(id){
   if (!confirm('Finalise this pay run? Payslips will be locked and visible to employees.')) return;
   const run = await idbGet('pay_runs', id); run.status='finalised'; run.finalised_at = nowISO();
   await idbPut('pay_runs', run);
+  // Reduce loan / attachment balances by the amounts actually deducted this run.
+  const slips = await idbByIndex('payslips','pay_run_id',id);
+  for (const p of slips){
+    for (const l of (p.lines||[])){
+      if (!l.source_id || !['loan_repayment','attachment'].includes(l.code)) continue;
+      const rec = await idbGet('recurring_deductions', l.source_id);
+      if (!rec || rec.balance == null) continue; // open-ended (no balance) → nothing to reduce
+      rec.balance = toMoney(Math.max(0, Number(rec.balance) - (Number(l.amount)||0)));
+      if (rec.balance <= 0){ rec.balance = 0; rec.active = false; }
+      await idbPut('recurring_deductions', rec);
+    }
+  }
   await logAction('pay_run_finalise', { period:run.period, run_id:id });
   toast('Pay run finalised');
   navigate('pay-run');
@@ -2325,6 +2464,29 @@ async function recalcAllInPayRun(runId){
   await logAction('pay_run_recalc', { period: run.period, run_id: runId, count });
   toast(`Recalculated ${count} payslip${count!==1?'s':''}`);
   navigate('pay-run');
+}
+// Apply a note to every payslip in the run (optionally only those without one).
+function noteToAllForm(runId){
+  openModal(`<h2>Note to all payslips</h2>
+    <form onsubmit="saveNoteToAll(event,'${runId}')">
+      <div class="form-group"><label>Note text</label><textarea id="na-note" rows="3" placeholder="e.g. Christmas pay run – paid early on 20th"></textarea></div>
+      <div class="form-group"><label>Apply to</label><select id="na-mode"><option value="empty">Only payslips without a note</option><option value="all">All payslips (overwrite existing notes)</option></select></div>
+      <div class="small muted">To clear all notes, leave the text blank and choose "All payslips".</div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Apply</button></div>
+    </form>`);
+}
+async function saveNoteToAll(ev, runId){
+  ev.preventDefault();
+  const note = val('na-note');
+  const mode = val('na-mode');
+  const slips = await idbByIndex('payslips','pay_run_id',runId);
+  let n=0;
+  for (const p of slips){
+    if (mode==='empty' && p.note) continue;
+    p.note = note; p.updated_at = nowISO();
+    await idbPut('payslips', p); n++;
+  }
+  closeModal(); toast(`Note applied to ${n} payslip${n!==1?'s':''}`); navigate('pay-run');
 }
 async function deletePayRun(id){
   const run = await idbGet('pay_runs', id);
@@ -2383,7 +2545,9 @@ function renderPayslipEditor(){
     <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:end">
       <div class="form-group" style="margin:0;flex:1;min-width:200px"><label>Add line</label><select id="ps-add">${addOptions}</select></div>
       <button type="button" class="btn btn-outline" onclick="addPayslipLine()">+ Add</button>
+      <button type="button" class="btn btn-outline" onclick="statutoryPayForm()">+ Statutory pay…</button>
     </div>
+    <div class="form-group" style="margin-top:14px"><label>Note on this payslip (optional)</label><textarea id="ps-note" rows="2" placeholder="Shown on the payslip">${esc(p.note||'')}</textarea></div>
     <div style="display:flex;gap:16px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap">
       <div><div class="small muted">Gross</div><div style="font-size:1.1rem;font-weight:700">${fmtPay(t.gross)}</div></div>
       <div><div class="small muted">Deductions</div><div style="font-size:1.1rem;font-weight:700">${fmtPay(t.deductions)}</div></div>
@@ -2402,6 +2566,7 @@ function renderPayslipEditor(){
 }
 // Save current draft, then open the previous/next payslip in the same pay run (sorted by last name).
 async function payslipNeighbour(direction){
+  syncPayslipNote();
   const p = window._payslipDraft;
   if (!p) return;
   // save current
@@ -2432,6 +2597,7 @@ async function buildPayrollContextFor(emp, payRunId){
   return ctx;
 }
 async function recalcPayslipStatutory(){
+  syncPayslipNote();
   const p = window._payslipDraft; if (!p) return;
   const emp = empById(p.employee_id); if (!emp){ toast('Employee not found','error'); return; }
   const ctx = await buildPayrollContextFor(emp, p.pay_run_id);
@@ -2440,6 +2606,7 @@ async function recalcPayslipStatutory(){
   renderPayslipEditor();
 }
 async function resetPayslipFromDefaults(){
+  syncPayslipNote();
   const p = window._payslipDraft; if (!p) return;
   if (!confirm('Replace all lines on this payslip with a fresh calculation from the employee\'s defaults (basic + allowances + tax/NI)?')) return;
   const emp = empById(p.employee_id); if (!emp){ toast('Employee not found','error'); return; }
@@ -2470,10 +2637,12 @@ function updatePayslipLine(idx, field, value, isAmount){
   if (totals.length>=3){ totals[0].textContent=fmtPay(t.gross); totals[1].textContent=fmtPay(t.deductions); totals[2].textContent=fmtPay(t.net); }
 }
 function removePayslipLine(idx){
+  syncPayslipNote();
   window._payslipDraft.lines.splice(idx,1);
   renderPayslipEditor();
 }
 function addPayslipLine(){
+  syncPayslipNote();
   const code = document.getElementById('ps-add').value;
   const c = window._payslipComponents.find(x=>x.code===code); if (!c) return;
   const emp = empById(window._payslipDraft.employee_id);
@@ -2495,7 +2664,67 @@ function addPayslipLine(){
   window._payslipDraft.lines.push({ code:c.code, label:c.label, category:c.category, units, rate: toMoney(rate), amount: toMoney(amount) });
   renderPayslipEditor();
 }
+// ── Statutory pay calculator (SSP / SMP / SPP / SAP) ──
+async function statutoryPayForm(){
+  syncPayslipNote();
+  const p = window._payslipDraft; if (!p) return;
+  const emp = empById(p.employee_id);
+  const s = await getPayrollSettings();
+  const awe = emp ? toMoney((Number(emp.salary)||0)/52) : 0;
+  openModal(`<h2>Statutory pay</h2><div class="modal-sub">${emp?esc(emp.first_name+' '+emp.last_name):''}</div>
+    <p class="small muted" style="margin:-6px 0 12px">Computes the amount for this pay period and adds it as a (taxable, NICable) payment, then recalculates PAYE/NIC. Rates: SSP £${s.statutory.sspWeekly.toFixed(2)}/wk; SMP/SPP/SAP standard £${s.statutory.familyWeekly.toFixed(2)}/wk; first 6 wks SMP/SAP at ${s.statutory.familyHigherPct}% of AWE.</p>
+    <form onsubmit="saveStatutoryPay(event)">
+      <div class="form-row">
+        <div class="form-group"><label>Type</label><select id="sp-type" onchange="statutoryPayHint()"><option value="ssp">Statutory Sick Pay (SSP)</option><option value="smp">Statutory Maternity Pay (SMP)</option><option value="spp">Statutory Paternity Pay (SPP)</option><option value="sap">Statutory Adoption Pay (SAP)</option></select></div>
+        <div class="form-group"><label>Average weekly earnings (£)</label><input id="sp-awe" type="number" step="0.01" value="${awe}"><div class="small muted">Used for SMP/SPP/SAP. Prefilled from salary ÷ 52.</div></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label id="sp-w1-label">Weeks at 90% (SMP/SAP first 6)</label><input id="sp-w1" type="number" step="0.01" value="0"></div>
+        <div class="form-group"><label id="sp-w2-label">Weeks at standard/flat rate</label><input id="sp-w2" type="number" step="0.01" value="0"></div>
+      </div>
+      <div class="small muted" id="sp-hint"></div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="renderPayslipEditor()">Back</button><button type="submit" class="btn btn-primary">Calculate & add</button></div>
+    </form>`);
+  statutoryPayHint();
+}
+function statutoryPayHint(){
+  const t = val('sp-type');
+  const w1 = document.getElementById('sp-w1'), w1l = document.getElementById('sp-w1-label');
+  const w2l = document.getElementById('sp-w2-label');
+  const hint = document.getElementById('sp-hint');
+  if (!w1l) return;
+  if (t==='ssp'){ w1.value='0'; w1.disabled=true; w1l.style.opacity=.5; w2l.textContent='Qualifying weeks (× weekly SSP)'; hint.textContent='SSP is a flat weekly rate. Enter the number of qualifying weeks falling in this pay period (waiting days excluded).'; }
+  else if (t==='spp'){ w1.value='0'; w1.disabled=true; w1l.style.opacity=.5; w2l.textContent='Weeks (max 2)'; hint.textContent='SPP = lower of the standard weekly rate or 90% of AWE, up to 2 weeks.'; }
+  else { w1.disabled=false; w1l.style.opacity=1; w1l.textContent='Weeks at 90% of AWE (first 6)'; w2l.textContent='Weeks at standard rate (after 6)'; hint.textContent='First 6 weeks at 90% of AWE, then the lower of the standard weekly rate or 90% of AWE.'; }
+}
+async function saveStatutoryPay(ev){
+  ev.preventDefault();
+  const p = window._payslipDraft; if (!p) return;
+  const emp = empById(p.employee_id);
+  const s = await getPayrollSettings();
+  const type = val('sp-type');
+  const awe = Number(val('sp-awe'))||0;
+  const w1 = Number(val('sp-w1'))||0;
+  const w2 = Number(val('sp-w2'))||0;
+  const ninety = toMoney(awe*0.9);
+  const stdCapped = toMoney(Math.min(s.statutory.familyWeekly, ninety));
+  let amount = 0, label = '';
+  if (type==='ssp'){ amount = toMoney(w2 * s.statutory.sspWeekly); label = 'Statutory Sick Pay'; }
+  else if (type==='spp'){ amount = toMoney(w2 * stdCapped); label = 'Statutory Paternity Pay'; }
+  else { amount = toMoney(w1*ninety + w2*stdCapped); label = type==='smp'?'Statutory Maternity Pay':'Statutory Adoption Pay'; }
+  if (amount<=0){ toast('Enter weeks to calculate an amount','error'); return; }
+  // Replace any existing line of the same type, then recompute tax/NI on new gross.
+  p.lines = p.lines.filter(l=>l.code!==type);
+  p.lines.push({ code:type, label, category:'payment', units: toMoney(w1+w2), rate: toMoney((w1+w2)? amount/(w1+w2):0), amount });
+  const ctx = await buildPayrollContextFor(emp, p.pay_run_id);
+  p.lines = await recomputeStatutoryLines(emp, p.lines, undefined, ctx);
+  toast(label+' added: '+fmtPay(amount));
+  renderPayslipEditor();
+}
+// Copy the note textarea into the draft so it survives re-renders / saves.
+function syncPayslipNote(){ const el=document.getElementById('ps-note'); if(el && window._payslipDraft) window._payslipDraft.note = el.value; }
 async function savePayslipDraft(){
+  syncPayslipNote();
   const p = window._payslipDraft;
   const t = payslipTotals(p.lines);
   p.gross_pay = t.gross; p.total_deductions = t.deductions; p.net_pay = t.net; p.employer_ni = t.employer_ni; p.employer_pension = t.employer_pension; p.updated_at = nowISO();
@@ -2667,6 +2896,7 @@ async function buildPayslipMarkup(p, run, e, ytd, opts){
           <td style="padding:8px 10px;text-align:right;background:#404042;color:var(--accent)"><strong>NET PAY</strong> ${fmtPayPlain(p.net_pay)}</td>
         </tr>
       </table>
+      ${p.note?`<div style="border:1px solid #404042;border-top:none;padding:8px 10px;font-size:0.85rem"><strong>Note:</strong> ${esc(p.note)}</div>`:''}
     </div>`;
 }
 // Move between payslips in the same pay run (admin view), sorted by last name.
