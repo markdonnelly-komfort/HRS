@@ -1741,9 +1741,9 @@ const DEFAULT_PAY_COMPONENTS = [
   { code:'ot_x1',             label:'Overtime x1',                category:'payment',   recurring:false, default_amount:1.0,display_order:20, enabled:true, value_type:'hourly_multiplier', system:true },
   { code:'ot_x1_5',           label:'Overtime x1.5',              category:'payment',   recurring:false, default_amount:1.5,display_order:21, enabled:true, value_type:'hourly_multiplier', system:true },
   { code:'ot_x2',             label:'Overtime x2',                category:'payment',   recurring:false, default_amount:2.0,display_order:22, enabled:true, value_type:'hourly_multiplier', system:true },
-  { code:'first_aid',         label:'First Aid',                  category:'payment',   recurring:false, default_amount:15, display_order:30, enabled:true, value_type:'fixed', system:true },
-  { code:'hse',               label:'HSE',                        category:'payment',   recurring:false, default_amount:15, display_order:31, enabled:true, value_type:'fixed', system:true },
-  { code:'fire_marshal',      label:'Fire Marshal',               category:'payment',   recurring:false, default_amount:15, display_order:32, enabled:true, value_type:'fixed', system:true },
+  { code:'first_aid',         label:'First Aid',                  category:'payment',   recurring:true,  default_amount:15, display_order:30, enabled:true, value_type:'fixed', system:true },
+  { code:'hse',               label:'HSE',                        category:'payment',   recurring:true,  default_amount:15, display_order:31, enabled:true, value_type:'fixed', system:true },
+  { code:'fire_marshal',      label:'Fire Marshal',               category:'payment',   recurring:true,  default_amount:15, display_order:32, enabled:true, value_type:'fixed', system:true },
   { code:'bonus',             label:'Bonus',                      category:'payment',   recurring:false, default_amount:0,  display_order:33, enabled:true, value_type:'fixed', system:true },
   { code:'commission',        label:'Commission',                 category:'payment',   recurring:false, default_amount:0,  display_order:34, enabled:true, value_type:'fixed', system:true },
   { code:'pension_sacrifice', label:'Salary Sacrifice (Pension)', category:'payment',   recurring:false, default_amount:0,  display_order:40, enabled:true, value_type:'calculated', system:true },
@@ -1784,6 +1784,15 @@ async function migratePayComponents(){
       c.default_amount = def.default_amount; changed = true;
     }
     if (changed) await idbPut('pay_components', c);
+  }
+  // One-time: make the stipend components carry-forward (recurring) under the new
+  // sticky model. Guarded by a setting so it never overrides later user choices.
+  if (!(await getSetting('migrated_stipend_carryforward', false))){
+    const stipends = new Set(['first_aid','hse','fire_marshal']);
+    for (const c of await idbGetAll('pay_components')){
+      if (stipends.has(c.code) && !c.recurring){ c.recurring = true; await idbPut('pay_components', c); }
+    }
+    await setSetting('migrated_stipend_carryforward', true);
   }
 }
 // Hourly rate = annual salary / (52 × weekly hours)
@@ -2002,21 +2011,21 @@ async function buildCalculatedLines(emp, settings, ctx){
   if (penSac) lines.push({ code:'pension_sacrifice', label:'Salary Sacrifice (Pension)', category:'payment', units:1, rate:-penSac, amount:-penSac });
   if (carSac) lines.push({ code:'car_sacrifice',     label:'Salary Sacrifice (Car)',     category:'payment', units:1, rate:-carSac, amount:-carSac });
 
-  // Auto-add any OTHER enabled+recurring components (e.g. Fire Marshal set to
-  // recurring). The basic/car/sacrifice and the engine-calculated items are
-  // already handled above, so they're excluded here.
+  // Carry-forward components (recurring=true, e.g. First Aid / HSE / Fire Marshal):
+  // these are STICKY, not defaulted. They appear this month ONLY if they were on
+  // last month's payslip, and they carry last month's actual value (which a user
+  // may have overridden). If they weren't on the prior payslip they don't appear —
+  // you add them manually once, and from then on they repeat until removed.
   const handled = new Set(['basic_pay','car_allowance','car_sacrifice','pension_sacrifice','paye','nic_ee','ni_er','pension_er']);
-  const recurringExtras = (await idbGetAll('pay_components'))
+  const carryForward = (await idbGetAll('pay_components'))
     .filter(c => c.enabled && c.recurring && !handled.has(c.code))
     .sort((a,b)=>(a.display_order||0)-(b.display_order||0));
-  for (const c of recurringExtras){
-    const vt = c.value_type || 'fixed';
-    if (vt === 'fixed'){
-      const amt = toMoney(Number(c.default_amount)||0);
-      lines.push({ code:c.code, label:c.label, category:c.category, units:1, rate:amt, amount:amt });
-    }
-    // hourly_multiplier / calculated recurring extras are skipped — they need
-    // per-period hours or are computed by the engine.
+  const priorLines = ctx?.priorLines || null;
+  for (const c of carryForward){
+    if ((c.value_type||'fixed') !== 'fixed') continue; // hourly/calculated never auto-carry
+    const prior = priorLines && priorLines.find(l => l.code === c.code);
+    if (!prior) continue; // not on the prior payslip → don't add this month
+    lines.push({ code:c.code, label:c.label, category:c.category, units: prior.units ?? 1, rate: toMoney(prior.rate ?? prior.amount), amount: toMoney(prior.amount) });
   }
 
   const grossTaxable = toMoney(lines.filter(l=>l.category==='payment').reduce((a,l)=>a+l.amount,0));
@@ -2064,7 +2073,7 @@ async function newPayRunForm(){
         <div class="form-group"><label class="req">Period (YYYY-MM)</label><input id="pr-period" value="${yyyy}-${mm}" pattern="\\d{4}-\\d{2}" required></div>
         <div class="form-group"><label class="req">Pay date</label><input id="pr-date" type="date" value="${today()}" required></div>
       </div>
-      <p class="small muted">Draft payslips will be created for all active employees, pre-populated with their basic pay (annual salary ÷ 12) and any recurring components. You can then edit each payslip before finalising the run.</p>
+      <p class="small muted">Draft payslips will be created for all active employees, pre-populated with their basic pay (annual salary ÷ 12), allowances/sacrifices, and any carry-forward items (e.g. First Aid, HSE, Fire Marshal) that were on their previous payslip — at last month's value. You can then edit each payslip before finalising the run.</p>
       <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Create draft run</button></div>
     </form>`);
 }
@@ -2081,6 +2090,9 @@ async function createPayRun(ev){
   for (const e of active){
     const ctx = { m1: !!e.tax_code_m1 };
     if (!ctx.m1){ Object.assign(ctx, await getYtdContext(e.id, period)); }
+    // Carry recurring components forward at last month's actual value.
+    const prior = await priorMonthPayslip(e.id, period);
+    if (prior) ctx.priorLines = prior.p.lines;
     const lines = await buildCalculatedLines(e, settings, ctx);
     const t = payslipTotals(lines);
     await idbPut('payslips', { id:uuid(), pay_run_id:runId, employee_id:e.id, lines, gross_pay:t.gross, total_deductions:t.deductions, net_pay:t.net, employer_ni:t.employer_ni, employer_pension:t.employer_pension, tax_code_at_pay:e.tax_code||'', tax_basis_at_pay:(e.tax_code_m1?'M1':'Cumulative'), ni_number_at_pay:e.ni_number||'', personnel_number_at_pay:e.employee_number||'', created_at:nowISO(), updated_at:nowISO() });
@@ -2566,8 +2578,8 @@ async function renderPayComponents(c){
   const fmtVT = vt => ({fixed:'£ fixed', hourly_multiplier:'× hourly', employee_linked:'Employee field', calculated:'Calculated'})[vt||'fixed'];
   c.innerHTML = `
     <div class="card"><div class="card-head"><h3>Pay components</h3></div>
-      <p class="small muted">Components used on payslips. Fixed (£) and hourly-multiplier values are editable here. Items linked to the employee record (basic pay, car allowance, sacrifices) or computed by the payroll engine (PAYE, NIC, employer pension) cannot be edited here — they're set per-employee or auto-calculated. Disable a component to hide it from new payslips while keeping historical ones intact.</p>
-      <div class="table-wrap"><table><thead><tr><th>Order</th><th>Code</th><th>Label</th><th>Category</th><th>Type</th><th>Recurring</th><th>Default</th><th>Enabled</th><th></th></tr></thead><tbody>${
+      <p class="small muted">Components used on payslips. Fixed (£) and hourly-multiplier values are editable here. Items linked to the employee record (basic pay, car allowance, sacrifices) or computed by the payroll engine (PAYE, NIC, employer pension) cannot be edited here — they're set per-employee or auto-calculated. <strong>Carry-forward</strong> items repeat on next month's draft at the same value <em>only if they were on the prior payslip</em> (add them manually once, then they stick until removed). Disable a component to hide it from new payslips while keeping historical ones intact.</p>
+      <div class="table-wrap"><table><thead><tr><th>Order</th><th>Code</th><th>Label</th><th>Category</th><th>Type</th><th>Carry fwd</th><th>Default</th><th>Enabled</th><th></th></tr></thead><tbody>${
         components.map(c=>{ const editable = (c.value_type||'fixed')==='fixed' || c.value_type==='hourly_multiplier'; return `<tr><td>${c.display_order||0}</td><td><code>${esc(c.code)}</code></td><td>${esc(c.label)}</td><td><span class="badge ${c.category==='payment'?'b-blue':(c.category==='deduction'?'b-red':'b-grey')}">${c.category}</span></td><td class="small">${fmtVT(c.value_type)}</td><td>${c.recurring?'Yes':'No'}</td><td>${fmtDefault(c)}</td><td>${c.enabled?'<span class="badge b-green">Enabled</span>':'<span class="badge b-grey">Disabled</span>'}</td><td style="text-align:right;white-space:nowrap">${editable?`<button class="btn btn-outline btn-sm" onclick="payComponentForm('${c.id}')">Edit</button>`:`<button class="btn btn-outline btn-sm" disabled style="opacity:.5;cursor:not-allowed" title="${c.value_type==='calculated'?'Calculated by engine':'Set per employee'}">Locked</button>`}${c.system?'':` <button class="btn btn-danger btn-sm" onclick="deletePayComponent('${c.id}')">×</button>`}</td></tr>`; }).join('')
       }</tbody></table></div>
     </div>`;
@@ -2600,7 +2612,7 @@ async function payComponentForm(id){
       </div>
       <div class="form-row">
         <div class="form-group"><label>${defaultLabel}</label><input id="pc-default" type="number" step="0.01" value="${c.default_amount||0}" ${lockedDefault?'disabled style="opacity:.5;cursor:not-allowed"':''}>${defaultHint?`<div class="small muted">${defaultHint}</div>`:''}</div>
-        <div class="form-group"><label>Recurring (auto-added to every payslip)</label><select id="pc-recurring" ${vt==='calculated'?'disabled':''}><option value="false" ${!c.recurring?'selected':''}>No</option><option value="true" ${c.recurring?'selected':''}>Yes</option></select></div>
+        <div class="form-group"><label>Carry forward (repeats next month once added)</label><select id="pc-recurring" ${vt==='calculated'?'disabled':''}><option value="false" ${!c.recurring?'selected':''}>No</option><option value="true" ${c.recurring?'selected':''}>Yes</option></select><div class="small muted">If Yes, this item repeats on the next draft at the prior value, but only when it was on the previous payslip.</div></div>
       </div>
       <div class="form-group"><label>Enabled</label><select id="pc-enabled"><option value="true" ${c.enabled!==false?'selected':''}>Yes</option><option value="false" ${c.enabled===false?'selected':''}>No</option></select></div>
       <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
