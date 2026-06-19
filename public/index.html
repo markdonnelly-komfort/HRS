@@ -2243,10 +2243,20 @@ async function renderPayRun(c){
       </div>
     </div>
     <div class="card"><div class="card-head"><h3>Payslips</h3></div>
-      <div class="table-wrap"><table><thead><tr><th>Employee</th><th>No.</th><th>Tax code</th><th>NI number</th><th>Gross</th><th>Deductions</th><th>Net</th><th></th></tr></thead><tbody>${
-        slips.map(p=>{ const e=empById(p.employee_id); return `<tr><td>${e?esc(e.first_name+' '+e.last_name):'—'}</td><td>${esc(p.personnel_number_at_pay)||'—'}</td><td>${esc(p.tax_code_at_pay)||'—'}</td><td>${esc(p.ni_number_at_pay)||'—'}</td><td>${fmtPay(p.gross_pay)}</td><td>${fmtPay(p.total_deductions)}</td><td><strong>${fmtPay(p.net_pay)}</strong></td><td style="text-align:right;white-space:nowrap">${draft?`<button class="btn btn-outline btn-sm" onclick="editPayslip('${p.id}')">Edit</button> `:''}<button class="btn btn-primary btn-sm" onclick="openPayslip('${p.id}')">View</button></td></tr>`; }).join('')
+      <div class="table-wrap"><table><thead><tr><th>Employee</th><th>No.</th><th>Start date</th><th>End date</th><th>Flags</th><th>Tax code</th><th>Gross</th><th>Deductions</th><th>Net</th><th></th></tr></thead><tbody>${
+        slips.map(p=>{ const e=empById(p.employee_id); return `<tr><td>${e?esc(e.first_name+' '+e.last_name):'—'}</td><td>${esc(p.personnel_number_at_pay)||'—'}</td><td>${e?fmtDate(e.start_date):'—'}</td><td>${e&&e.end_date?fmtDate(e.end_date):'—'}</td><td>${payslipFlags(e, run.period, p)}</td><td>${esc(p.tax_code_at_pay)||'—'}</td><td>${fmtPay(p.gross_pay)}</td><td>${fmtPay(p.total_deductions)}</td><td><strong>${fmtPay(p.net_pay)}</strong></td><td style="text-align:right;white-space:nowrap">${draft?`<button class="btn btn-outline btn-sm" onclick="editPayslip('${p.id}')">Edit</button> `:''}<button class="btn btn-primary btn-sm" onclick="openPayslip('${p.id}')">View</button></td></tr>`; }).join('')
       }</tbody></table></div>
     </div>`;
+}
+// Badges indicating starter / leaver / back pay for an employee in a pay-run period.
+function payslipFlags(e, period, p){
+  if (!e || !period) return '';
+  const { start:ms, end:me } = periodMonthBounds(period);
+  const out = [];
+  if (e.start_date && e.start_date>=ms && e.start_date<=me) out.push('<span class="badge b-blue">Starter</span>');
+  if (e.end_date && e.end_date>=ms && e.end_date<=me) out.push('<span class="badge b-amber">Leaver</span>');
+  if (p && (p.lines||[]).some(l=>l.code==='back_pay')) out.push('<span class="badge b-green">Back pay</span>');
+  return out.join(' ') || '—';
 }
 async function finalisePayRun(id){
   if (!confirm('Finalise this pay run? Payslips will be locked and visible to employees.')) return;
@@ -2329,7 +2339,8 @@ function renderPayslipEditor(){
   const addOptions = components.map(c=>`<option value="${c.code}">${esc(c.label)} (${c.category})</option>`).join('');
   const t = payslipTotals(p.lines);
   openModal(`<h2>Edit payslip</h2>
-    <div class="modal-sub">${e?esc(e.first_name+' '+e.last_name):'—'} · ${periodLabel((window._payRunPeriod||''))}</div>
+    <div class="modal-sub">${e?esc(e.first_name+' '+e.last_name):'—'}${e&&e.employee_number?' · '+esc(e.employee_number):''}</div>
+    <div class="small muted" style="margin:-8px 0 14px">Start date: <strong>${e?fmtDate(e.start_date):'—'}</strong> · End date: <strong>${e&&e.end_date?fmtDate(e.end_date):'—'}</strong>${e&&e.status==='leaver'?' · <span class="badge b-amber">Leaver</span>':''}</div>
     <div class="table-wrap"><table id="ps-lines"><thead><tr><th>Type</th><th>Description</th><th>Units</th><th>Rate</th><th>Amount</th><th></th></tr></thead><tbody>${
       p.lines.map((l,i)=>lineRow(l,i)).join('')
     }</tbody></table></div>
@@ -2487,6 +2498,11 @@ async function renderPayslip(c){
 
   const main = await buildPayslipMarkup(p, run, e, ytd, { company, taxOfficeRef });
 
+  // Employment-dates info banner for the inputter/reviewer (hidden on print).
+  const empInfo = e ? `<div class="payslip-compare-sep" style="margin-bottom:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 14px">
+      <span class="small muted">Employee record</span> · Start date: <strong>${fmtDate(e.start_date)}</strong> · End date: <strong>${e.end_date?fmtDate(e.end_date):'—'}</strong> · Status: <strong>${({active:'Active',on_leave:'On leave',leaver:'Leaver'})[e.status]||e.status}</strong> ${payslipFlags(e, run.period, p)!=='—'?'· '+payslipFlags(e, run.period, p):''}
+    </div>` : '';
+
   // Prior month payslip for side-by-side comparison (hidden on print).
   const prior = await priorMonthPayslip(p.employee_id, run.period);
   let comparison = '';
@@ -2500,7 +2516,7 @@ async function renderPayslip(c){
       </div>
       ${priorMarkup}`;
   }
-  c.innerHTML = main + comparison;
+  c.innerHTML = empInfo + main + comparison;
 }
 // Badge showing change in net pay vs prior month
 function netDeltaBadge(current, prior){
