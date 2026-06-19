@@ -193,6 +193,7 @@
       body { background: white; }
       .payslip-print { padding: 16px; color: #000; page-break-inside: avoid; }
       .payslip-print table { color: #000; }
+      .payslip-comparison, .payslip-compare-sep { display: none !important; }
     }
   </style>
 </head>
@@ -2358,9 +2359,53 @@ async function renderPayslip(c){
   // Employees/managers can only see finalised payslips
   if (role!=='hr_admin' && run.status!=='finalised'){ c.innerHTML='<div class="empty">This payslip is not yet finalised.</div>'; return; }
   const ytd = await ytdForEmployee(p.employee_id, run.period);
-  const monthNo = periodMonthNumber(run.period);
+  const company = await getSetting('company_name','Komfort Partitioning Ltd');
+  const taxOfficeRef = await getSetting('tax_office_ref','—');
+
+  // Admin viewing from a pay run gets Next/Prev across employees in that run.
   const backPage = role==='hr_admin' ? (window._payRunId?'pay-run':'payroll') : 'my-payslips';
-  setTopbar(`<button class="btn btn-outline" onclick="navigate('${backPage}')">← Back</button> <button class="btn btn-accent" onclick="window.print()">Print / Save as PDF</button>`);
+  const navBtns = (role==='hr_admin' && window._payRunId)
+    ? `<button class="btn btn-outline" onclick="payslipViewPrev()">← Prev</button> <button class="btn btn-outline" onclick="payslipViewNext()">Next →</button> `
+    : '';
+  setTopbar(`<button class="btn btn-outline" onclick="navigate('${backPage}')">← Back</button> ${navBtns}<button class="btn btn-accent" onclick="window.print()">Print / Save as PDF</button>`);
+
+  const main = await buildPayslipMarkup(p, run, e, ytd, { company, taxOfficeRef });
+
+  // Prior month payslip for side-by-side comparison (hidden on print).
+  const prior = await priorMonthPayslip(p.employee_id, run.period);
+  let comparison = '';
+  if (prior){
+    const priorYtd = await ytdForEmployee(prior.p.employee_id, prior.run.period);
+    const priorMarkup = await buildPayslipMarkup(prior.p, prior.run, e, priorYtd, { company, taxOfficeRef, comparison:true });
+    comparison = `
+      <div class="payslip-compare-sep" style="margin:28px 0 12px;border-top:2px dashed var(--border);padding-top:16px">
+        <h3 style="margin:0 0 4px">Previous month — for comparison</h3>
+        <p class="small muted" style="margin:0 0 12px">${periodLabel(prior.run.period)} (Month ${periodMonthNumber(prior.run.period)}) · Net ${fmtPay(prior.p.net_pay)} ${netDeltaBadge(p.net_pay, prior.p.net_pay)}</p>
+      </div>
+      ${priorMarkup}`;
+  }
+  c.innerHTML = main + comparison;
+}
+// Badge showing change in net pay vs prior month
+function netDeltaBadge(current, prior){
+  const d = toMoney((Number(current)||0) - (Number(prior)||0));
+  if (d === 0) return '<span class="badge b-grey">no change</span>';
+  return `<span class="badge ${d>0?'b-green':'b-red'}">${d>0?'+':''}${fmtPay(d)} vs this month</span>`;
+}
+// Most recent finalised payslip for the employee in an earlier period.
+async function priorMonthPayslip(empId, currentPeriod){
+  const slips = await idbByIndex('payslips','employee_id',empId);
+  const runs = await idbGetAll('pay_runs');
+  const runMap = Object.fromEntries(runs.map(r=>[r.id,r]));
+  const cand = slips.map(s=>({ p:s, run:runMap[s.pay_run_id] }))
+    .filter(x => x.run && (x.run.period||'') < currentPeriod && x.run.status==='finalised')
+    .sort((a,b)=> (b.run.period||'').localeCompare(a.run.period||''));
+  return cand[0] || null;
+}
+// Build the printable markup for one payslip. opts: { company, taxOfficeRef, comparison }
+async function buildPayslipMarkup(p, run, e, ytd, opts){
+  const { company, taxOfficeRef, comparison } = opts;
+  const monthNo = periodMonthNumber(run.period);
   const payments = p.lines.filter(l=>l.category==='payment');
   const deductions = p.lines.filter(l=>l.category==='deduction');
   const other = p.lines.filter(l=>l.category==='other');
@@ -2378,12 +2423,15 @@ async function renderPayslip(c){
     { label:'NI YTD EE', amount: ytd.nic_ee },
     { label:'Er Pension TD', amount: ytd.pension_er }
   ];
-  const company = await getSetting('company_name','Komfort Partitioning Ltd');
-  c.innerHTML = `
-    <div class="payslip-print">
+  const name = e?esc((e.title?e.title+' ':'')+e.first_name[0]+'. '+e.last_name):'—';
+  // qty shown only when meaningful (>1 or non-integer); rate shown when present
+  const qtyCell = l => { const u = Number(l.units); return (u && u!==1) ? fmtPayPlain(u) : (u===1?'1.00':''); };
+  const rateCell = l => l.rate ? fmtPayPlain(l.rate) : '';
+  return `
+    <div class="payslip-print${comparison?' payslip-comparison':''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px;gap:20px">
         <div>
-          <div style="font-weight:700">${e?esc((e.title?e.title+' ':'')+e.first_name[0]+'. '+e.last_name):'—'}</div>
+          <div style="font-weight:700">${name}</div>
           <div>${esc(company)}</div>
           <div>${esc(e?.site||'')}</div>
           <div style="margin-top:8px;font-weight:700">${esc(p.personnel_number_at_pay)||''}</div>
@@ -2399,21 +2447,21 @@ async function renderPayslip(c){
           <td style="padding:4px 0"><strong>Employer</strong></td><td>${esc(company)}</td>
         </tr>
         <tr>
-          <td style="padding:4px 0"><strong>Personnel Name</strong></td><td>${e?esc((e.title?e.title+' ':'')+e.first_name[0]+'. '+e.last_name):'—'}</td>
-          <td style="padding:4px 0"><strong>Tax Office Reference</strong></td><td>${esc(await getSetting('tax_office_ref','—'))}</td>
+          <td style="padding:4px 0"><strong>Personnel Name</strong></td><td>${name}</td>
+          <td style="padding:4px 0"><strong>Tax Office Reference</strong></td><td>${esc(taxOfficeRef)}</td>
         </tr>
         <tr>
           <td></td><td></td>
           <td style="padding:4px 0"><strong>NI Number</strong></td><td>${esc(p.ni_number_at_pay)||'—'}</td>
         </tr>
       </table>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border:1px solid #404042">
+      <div style="display:grid;grid-template-columns:1.1fr 0.9fr 0.9fr;gap:0;border:1px solid #404042">
         <div style="border-right:1px solid #404042">
           <div style="background:#f4f6f7;padding:6px 10px;text-align:center;font-weight:700;border-bottom:1px solid #404042">Payments</div>
           <table style="width:100%;border-collapse:collapse">
-            <thead><tr style="border-bottom:1px solid #404042"><th style="text-align:left;padding:6px 10px">Description</th><th style="text-align:right;padding:6px 10px">Hours/Rate</th><th style="text-align:right;padding:6px 10px">Amount</th></tr></thead>
-            <tbody>${payments.map(l=>`<tr><td style="padding:4px 10px">${esc(l.label)}</td><td style="padding:4px 10px;text-align:right">${l.units!=null?fmtPayPlain(l.units):''} ${l.rate?fmtPayPlain(l.rate):''}</td><td style="padding:4px 10px;text-align:right">${fmtPayPlain(l.amount)}</td></tr>`).join('')}
-            <tr style="border-top:1px solid #404042"><td style="padding:6px 10px;font-weight:700">Total Payments</td><td></td><td style="padding:6px 10px;text-align:right;font-weight:700">${fmtPayPlain(p.gross_pay)}</td></tr>
+            <thead><tr style="border-bottom:1px solid #404042"><th style="text-align:left;padding:6px 8px">Description</th><th style="text-align:right;padding:6px 8px">Qty</th><th style="text-align:right;padding:6px 8px">Rate</th><th style="text-align:right;padding:6px 8px">Amount</th></tr></thead>
+            <tbody>${payments.map(l=>`<tr><td style="padding:4px 8px">${esc(l.label)}</td><td style="padding:4px 8px;text-align:right">${qtyCell(l)}</td><td style="padding:4px 8px;text-align:right">${rateCell(l)}</td><td style="padding:4px 8px;text-align:right">${fmtPayPlain(l.amount)}</td></tr>`).join('')}
+            <tr style="border-top:1px solid #404042"><td style="padding:6px 8px;font-weight:700" colspan="3">Total Payments</td><td style="padding:6px 8px;text-align:right;font-weight:700">${fmtPayPlain(p.gross_pay)}</td></tr>
             </tbody>
           </table>
         </div>
@@ -2449,6 +2497,20 @@ async function renderPayslip(c){
       </table>
     </div>`;
 }
+// Move between payslips in the same pay run (admin view), sorted by last name.
+async function payslipViewNeighbour(direction){
+  const p = await idbGet('payslips', window._payslipId);
+  if (!p) return;
+  const slips = (await idbByIndex('payslips','pay_run_id', p.pay_run_id))
+    .sort((a,b)=>{ const ae=empById(a.employee_id), be=empById(b.employee_id); return (ae?.last_name||'').localeCompare(be?.last_name||''); });
+  const idx = slips.findIndex(x=>x.id===p.id);
+  const target = direction==='next' ? slips[idx+1] : slips[idx-1];
+  if (!target){ toast(direction==='next'?'Last payslip in this run':'First payslip in this run','info'); return; }
+  window._payslipId = target.id;
+  navigate('payslip');
+}
+function payslipViewNext(){ payslipViewNeighbour('next'); }
+function payslipViewPrev(){ payslipViewNeighbour('prev'); }
 
 // ── Self-service: My Payslips ──
 async function renderMyPayslips(c){
