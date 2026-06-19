@@ -2101,7 +2101,7 @@ async function renderPayRun(c){
   const erNI = slips.reduce((a,p)=>a+(Number(p.employer_ni)||0),0);
   const erPen = slips.reduce((a,p)=>a+(Number(p.employer_pension)||0),0);
   const draft = run.status==='draft';
-  setTopbar(`<button class="btn btn-outline" onclick="navigate('payroll')">← Back</button>${draft?` <button class="btn btn-success" onclick="finalisePayRun('${run.id}')">Finalise pay run</button>`:''}${draft?` <button class="btn btn-danger" onclick="deletePayRun('${run.id}')">Delete</button>`:''}`);
+  setTopbar(`<button class="btn btn-outline" onclick="navigate('payroll')">← Back</button>${draft?` <button class="btn btn-warning" onclick="recalcAllInPayRun('${run.id}')">Recalculate tax & NI</button>`:''}${draft?` <button class="btn btn-success" onclick="finalisePayRun('${run.id}')">Finalise pay run</button>`:''}${draft?` <button class="btn btn-danger" onclick="deletePayRun('${run.id}')">Delete</button>`:''}`);
   c.innerHTML = `
     <div class="card">
       <div class="card-head">
@@ -2128,6 +2128,30 @@ async function finalisePayRun(id){
   await idbPut('pay_runs', run);
   await logAction('pay_run_finalise', { period:run.period, run_id:id });
   toast('Pay run finalised');
+  navigate('pay-run');
+}
+// Recompute PAYE / NIC / employer items for every payslip in a draft pay run.
+async function recalcAllInPayRun(runId){
+  const run = await idbGet('pay_runs', runId);
+  if (!run || run.status !== 'draft'){ toast('Only draft runs can be recalculated','error'); return; }
+  if (!confirm('Recalculate tax & NI on every payslip in this run? Manual one-off lines (overtime, allowances) are preserved.')) return;
+  const slips = await idbByIndex('payslips','pay_run_id', runId);
+  const settings = await getPayrollSettings();
+  let count = 0;
+  for (const p of slips){
+    const emp = empById(p.employee_id);
+    if (!emp) continue;
+    const ctx = await buildPayrollContextFor(emp, runId);
+    p.lines = await recomputeStatutoryLines(emp, p.lines, settings, ctx);
+    const t = payslipTotals(p.lines);
+    p.gross_pay = t.gross; p.total_deductions = t.deductions; p.net_pay = t.net;
+    p.employer_ni = t.employer_ni; p.employer_pension = t.employer_pension;
+    p.updated_at = nowISO();
+    await idbPut('payslips', p);
+    count++;
+  }
+  await logAction('pay_run_recalc', { period: run.period, run_id: runId, count });
+  toast(`Recalculated ${count} payslip${count!==1?'s':''}`);
   navigate('pay-run');
 }
 async function deletePayRun(id){
