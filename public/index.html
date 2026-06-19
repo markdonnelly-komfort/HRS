@@ -1818,7 +1818,9 @@ function payslipTotals(lines){
 }
 async function ytdForEmployee(empId, uptoPeriod){
   // Sum finalised payslips for the employee in the current tax year UP TO and including uptoPeriod.
-  const bounds = await taxYearBounds(uptoPeriod ? uptoPeriod+'-01' : null);
+  // Anchor the tax-year lookup mid-month (-15) so an April period (06 Apr tax-year
+  // start) resolves to the correct tax year rather than the previous one.
+  const bounds = await taxYearBounds(uptoPeriod ? uptoPeriod+'-15' : null);
   const runs = await idbGetAll('pay_runs');
   const inYearRuns = runs.filter(r => r.status==='finalised' && r.pay_date>=bounds.start && r.pay_date<=bounds.end && (!uptoPeriod || r.period<=uptoPeriod));
   const runIds = new Set(inYearRuns.map(r=>r.id));
@@ -1948,7 +1950,8 @@ function calcPAYE(taxableMonthly, taxCode, s, ctx){
 // YTD context for cumulative PAYE: how much gross/PAYE has the employee already
 // paid in this tax year, BEFORE the given period (period is 'YYYY-MM').
 async function getYtdContext(employeeId, currentPeriod){
-  const bounds = await taxYearBounds(currentPeriod+'-01');
+  // Mid-month anchor so an April period resolves to the correct (current) tax year.
+  const bounds = await taxYearBounds(currentPeriod+'-15');
   const runs = await idbGetAll('pay_runs');
   const priorRuns = runs.filter(r => r.status==='finalised'
     && r.pay_date>=bounds.start && r.pay_date<=bounds.end
