@@ -406,6 +406,7 @@ async function seedDefaults(){
     car_sacrifice_monthly: o.carsac ?? 0,
     pension_sacrifice_pct: o.pensac ?? 5,
     employer_pension_pct: o.erpen ?? 8,
+    p45_tax_year: o.p45yr || '', p45_pay_to_date: o.p45pay ?? null, p45_tax_to_date: o.p45tax ?? null, p45_employer_paye_ref: o.p45ref || '',
     holiday_allowance:o.hol||DEFAULT_ALLOWANCE,
     photo:null, notes:'', created_at:nowISO(), updated_at:nowISO()
   });
@@ -1033,7 +1034,8 @@ function empTabEmployment(body, id){
     <dt>Salary sacrifice (pension)</dt><dd>${e.pension_sacrifice_pct?Number(e.pension_sacrifice_pct).toFixed(1)+'% of basic':'—'}</dd>
     <dt>Employer pension</dt><dd>${e.employer_pension_pct?Number(e.employer_pension_pct).toFixed(1)+'% of basic':'—'}</dd>
     <dt>Bank sort code</dt><dd>${esc(e.bank_sort_code)||'—'}</dd>
-    <dt>Bank account</dt><dd>${esc(e.bank_account)||'—'}</dd>`:''}
+    <dt>Bank account</dt><dd>${esc(e.bank_account)||'—'}</dd>
+    ${e.p45_tax_year?`<dt>P45 (prev. employment)</dt><dd>${esc(e.p45_tax_year)} · Pay ${fmtMoney(e.p45_pay_to_date)} · Tax ${fmtMoney(e.p45_tax_to_date)}${e.p45_employer_paye_ref?' · Ref '+esc(e.p45_employer_paye_ref):''}</dd>`:''}`:''}
     <dt>Holiday allowance</dt><dd>${e.holiday_allowance} days/yr</dd>
     <dt>Notes</dt><dd>${esc(e.notes)||'—'}</dd>
   </dl></div>`;
@@ -1197,6 +1199,17 @@ function employeeForm(id){
           <div class="form-group"><label>Employer pension (% of basic)</label><input id="f-er-pen-pct" type="number" step="0.1" value="${e.employer_pension_pct??8}"></div>
         </div>
       </fieldset>
+      <fieldset><legend>P45 — previous employment (this tax year)</legend>
+        <p class="small muted" style="margin:-4px 0 12px">For mid-year starters on a cumulative tax code. Pay/tax to date carry into the cumulative PAYE calculation when the tax year matches.</p>
+        <div class="form-row">
+          <div class="form-group"><label>Tax year</label><select id="f-p45-yr"><option value="">— none —</option>${(()=>{ const opts=recentTaxYearLabels(); if(e.p45_tax_year && !opts.includes(e.p45_tax_year)) opts.unshift(e.p45_tax_year); return opts.map(y=>`<option ${e.p45_tax_year===y?'selected':''}>${y}</option>`).join(''); })()}</select></div>
+          <div class="form-group"><label>Previous employer PAYE ref</label><input id="f-p45-ref" value="${esc(e.p45_employer_paye_ref||'')}" placeholder="e.g. 120/AB456"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Total pay to date (£)</label><input id="f-p45-pay" type="number" step="0.01" value="${e.p45_pay_to_date??''}"></div>
+          <div class="form-group"><label>Total tax to date (£)</label><input id="f-p45-tax" type="number" step="0.01" value="${e.p45_tax_to_date??''}"></div>
+        </div>
+      </fieldset>
       <div class="modal-actions">
         <button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button>
         <button type="submit" class="btn btn-primary">${id?'Save changes':'Add employee'}</button>
@@ -1227,6 +1240,8 @@ async function saveEmployee(ev, id){
     car_sacrifice_monthly: Number(val('f-car-sac'))||0,
     pension_sacrifice_pct: Number(val('f-pen-sac-pct'))||0,
     employer_pension_pct: Number(val('f-er-pen-pct'))||0,
+    p45_tax_year: val('f-p45-yr'), p45_employer_paye_ref: val('f-p45-ref'),
+    p45_pay_to_date: numVal('f-p45-pay'), p45_tax_to_date: numVal('f-p45-tax'),
     holiday_allowance: numVal('f-hol') ?? DEFAULT_ALLOWANCE,
     photo, notes: val('f-notes'),
     created_at: existing?.created_at || nowISO(), updated_at: nowISO()
@@ -1815,6 +1830,10 @@ async function taxYearBounds(ref){
   const end = new Date(startYear+1, mm-1, dd); end.setDate(end.getDate()-1);
   return { start: start.toISOString().slice(0,10), end: end.toISOString().slice(0,10), label:`${startYear}/${String(startYear+1).slice(2)}` };
 }
+// Tax-year label helpers (UK 6 Apr boundary) for the P45 picker.
+function currentTaxYearStartYear(){ const n=new Date(); const boundary=new Date(n.getFullYear(),3,6); return n<boundary?n.getFullYear()-1:n.getFullYear(); }
+function taxYearLabelFor(sy){ return `${sy}/${String(sy+1).slice(2)}`; }
+function recentTaxYearLabels(){ const sy=currentTaxYearStartYear(); return [sy+1, sy, sy-1, sy-2].map(taxYearLabelFor); }
 function fmtPay(n){ if (n==null||isNaN(n)) return '0.00'; const v=Number(n); return (v<0?'-':'')+'£'+Math.abs(v).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function fmtPayPlain(n){ if (n==null||isNaN(n)) return '0.00'; return Number(n).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function toMoney(n){ return Math.round((Number(n)||0)*100)/100; }
@@ -1857,7 +1876,18 @@ async function ytdForEmployee(empId, uptoPeriod, includeRunId){
       if (l.code==='pension_er') pensionEr += Number(l.amount)||0;
     });
   });
-  return { gross:toMoney(gross), paye:toMoney(paye), nic_ee:toMoney(nicEe), ni_er:toMoney(niEr), pension_er:toMoney(pensionEr), bounds };
+  // P45 from a previous employer (same tax year): adds to the tax-cumulative
+  // figures (gross for tax / tax YTD) but NOT to NI earnings (NI isn't cumulative
+  // across employments).
+  const emp = empById(empId) || (await idbGet('employees', empId));
+  let p45Pay=0, p45Tax=0;
+  if (emp && emp.p45_tax_year === bounds.label){ p45Pay = Number(emp.p45_pay_to_date)||0; p45Tax = Number(emp.p45_tax_to_date)||0; }
+  return {
+    gross: toMoney(gross), paye: toMoney(paye), nic_ee: toMoney(nicEe), ni_er: toMoney(niEr), pension_er: toMoney(pensionEr),
+    p45_pay: toMoney(p45Pay), p45_tax: toMoney(p45Tax),
+    taxable_gross: toMoney(gross + p45Pay), tax_total: toMoney(paye + p45Tax),
+    bounds
+  };
 }
 async function payComponentsSorted(){
   return (await idbGetAll('pay_components')).filter(c=>c.enabled).sort((a,b)=>(a.display_order||0)-(b.display_order||0));
@@ -1980,8 +2010,14 @@ async function getYtdContext(employeeId, currentPeriod){
     && (r.period||'') < currentPeriod);
   const priorIds = new Set(priorRuns.map(r=>r.id));
   const slips = (await idbByIndex('payslips','employee_id',employeeId)).filter(p => priorIds.has(p.pay_run_id));
-  const priorGross = slips.reduce((a,p)=>a+(Number(p.gross_pay)||0), 0);
-  const priorPaye  = slips.reduce((a,p)=>{ const l=(p.lines||[]).find(x=>x.code==='paye'); return a + (Number(l?.amount)||0); }, 0);
+  let priorGross = slips.reduce((a,p)=>a+(Number(p.gross_pay)||0), 0);
+  let priorPaye  = slips.reduce((a,p)=>{ const l=(p.lines||[]).find(x=>x.code==='paye'); return a + (Number(l?.amount)||0); }, 0);
+  // P45 from a previous employer counts as prior pay/tax in the SAME tax year.
+  const emp = empById(employeeId) || (await idbGet('employees', employeeId));
+  if (emp && emp.p45_tax_year === bounds.label){
+    priorGross += Number(emp.p45_pay_to_date)||0;
+    priorPaye  += Number(emp.p45_tax_to_date)||0;
+  }
   return { periodNumber: periodMonthNumber(currentPeriod), priorGross: toMoney(priorGross), priorPaye: toMoney(priorPaye) };
 }
 function calcNicEe(grossMonthly, s){
@@ -2547,10 +2583,14 @@ async function buildPayslipMarkup(p, run, e, ytd, opts){
     { label:'Earnings for NI', amount: p.gross_pay },
     ...other.map(l=>({ label:l.label, amount:l.amount }))
   ];
+  // Tax-cumulative figures include any P45 brought forward; NI earnings do not.
+  const taxableYtd = ytd.taxable_gross != null ? ytd.taxable_gross : ytd.gross;
+  const taxYtd = ytd.tax_total != null ? ytd.tax_total : ytd.paye;
   const ytdRows = [
-    { label:'Gross YTD', amount: ytd.gross },
-    { label:'Taxable YTD', amount: ytd.gross },
-    { label:'Tax YTD', amount: ytd.paye },
+    { label:'Gross YTD', amount: taxableYtd },
+    { label:'Taxable YTD', amount: taxableYtd },
+    { label:'Tax YTD', amount: taxYtd },
+    ...((ytd.p45_pay||ytd.p45_tax) ? [{ label:'  of which P45', amount: ytd.p45_pay }] : []),
     { label:'Earnings For NI TD', amount: ytd.gross },
     { label:'NI YTD EE', amount: ytd.nic_ee },
     { label:'Er Pension TD', amount: ytd.pension_er }
@@ -2655,8 +2695,8 @@ async function renderMyPayslips(c){
   const ytd = await ytdForEmployee(empId);
   c.innerHTML = `
     <div class="stat-grid">
-      <div class="stat"><div class="num">${fmtPay(ytd.gross)}</div><div class="lbl">Gross YTD (${ytd.bounds.label})</div></div>
-      <div class="stat warn"><div class="num">${fmtPay(ytd.paye)}</div><div class="lbl">PAYE YTD</div></div>
+      <div class="stat"><div class="num">${fmtPay(ytd.taxable_gross)}</div><div class="lbl">Gross YTD (${ytd.bounds.label})${ytd.p45_pay?' · incl. P45':''}</div></div>
+      <div class="stat warn"><div class="num">${fmtPay(ytd.tax_total)}</div><div class="lbl">PAYE YTD${ytd.p45_tax?' · incl. P45':''}</div></div>
       <div class="stat warn"><div class="num">${fmtPay(ytd.nic_ee)}</div><div class="lbl">Employee NIC YTD</div></div>
     </div>
     <div class="card"><div class="card-head"><h3>My payslips</h3></div>
