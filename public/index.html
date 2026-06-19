@@ -1835,13 +1835,15 @@ function payslipTotals(lines){
   });
   return { gross: toMoney(gross), deductions: toMoney(deductions), net: toMoney(gross-deductions), employer_ni: toMoney(employerNI), employer_pension: toMoney(employerPension) };
 }
-async function ytdForEmployee(empId, uptoPeriod){
-  // Sum finalised payslips for the employee in the current tax year UP TO and including uptoPeriod.
+async function ytdForEmployee(empId, uptoPeriod, includeRunId){
+  // Sum payslips for the employee in the current tax year UP TO and including uptoPeriod.
   // Anchor the tax-year lookup mid-month (-15) so an April period (06 Apr tax-year
   // start) resolves to the correct tax year rather than the previous one.
+  // Normally only FINALISED runs count, but when viewing a specific payslip we pass
+  // its run id so the current (possibly draft) period is included in its own YTD.
   const bounds = await taxYearBounds(uptoPeriod ? uptoPeriod+'-15' : null);
   const runs = await idbGetAll('pay_runs');
-  const inYearRuns = runs.filter(r => r.status==='finalised' && r.pay_date>=bounds.start && r.pay_date<=bounds.end && (!uptoPeriod || r.period<=uptoPeriod));
+  const inYearRuns = runs.filter(r => (r.status==='finalised' || r.id===includeRunId) && r.pay_date>=bounds.start && r.pay_date<=bounds.end && (!uptoPeriod || r.period<=uptoPeriod));
   const runIds = new Set(inYearRuns.map(r=>r.id));
   const slips = (await idbByIndex('payslips','employee_id',empId)).filter(p => runIds.has(p.pay_run_id));
   let gross=0, paye=0, nicEe=0, niEr=0, pensionEr=0;
@@ -2387,7 +2389,7 @@ async function renderPayslip(c){
   }
   // Employees/managers can only see finalised payslips
   if (role!=='hr_admin' && run.status!=='finalised'){ c.innerHTML='<div class="empty">This payslip is not yet finalised.</div>'; return; }
-  const ytd = await ytdForEmployee(p.employee_id, run.period);
+  const ytd = await ytdForEmployee(p.employee_id, run.period, run.id);
   const company = await getSetting('company_name','Komfort Partitioning Ltd');
   const taxOfficeRef = await getSetting('tax_office_ref','—');
 
@@ -2404,7 +2406,7 @@ async function renderPayslip(c){
   const prior = await priorMonthPayslip(p.employee_id, run.period);
   let comparison = '';
   if (prior){
-    const priorYtd = await ytdForEmployee(prior.p.employee_id, prior.run.period);
+    const priorYtd = await ytdForEmployee(prior.p.employee_id, prior.run.period, prior.run.id);
     const priorMarkup = await buildPayslipMarkup(prior.p, prior.run, e, priorYtd, { company, taxOfficeRef, comparison:true });
     comparison = `
       <div class="payslip-compare-sep" style="margin:28px 0 12px;border-top:2px dashed var(--border);padding-top:16px">
