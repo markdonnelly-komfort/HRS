@@ -1746,6 +1746,7 @@ const DEFAULT_PAY_COMPONENTS = [
   { code:'fire_marshal',      label:'Fire Marshal',               category:'payment',   recurring:true,  default_amount:15, display_order:32, enabled:true, value_type:'fixed', system:true },
   { code:'bonus',             label:'Bonus',                      category:'payment',   recurring:false, default_amount:0,  display_order:33, enabled:true, value_type:'fixed', system:true },
   { code:'commission',        label:'Commission',                 category:'payment',   recurring:false, default_amount:0,  display_order:34, enabled:true, value_type:'fixed', system:true },
+  { code:'back_pay',          label:'Back Pay',                   category:'payment',   recurring:false, default_amount:0,  display_order:35, enabled:true, value_type:'fixed', system:true },
   { code:'pension_sacrifice', label:'Salary Sacrifice (Pension)', category:'payment',   recurring:false, default_amount:0,  display_order:40, enabled:true, value_type:'calculated', system:true },
   { code:'car_sacrifice',     label:'Salary Sacrifice (Car)',     category:'payment',   recurring:false, default_amount:0,  display_order:41, enabled:true, value_type:'employee_linked', linked_field:'car_sacrifice_monthly', system:true },
   { code:'paye',              label:'PAYE',                       category:'deduction', recurring:false, default_amount:0,  display_order:50, enabled:true, value_type:'calculated', system:true },
@@ -1995,23 +1996,93 @@ function calcNicEr(grossMonthly, s){
   if (grossMonthly <= st) return 0;
   return toMoney((grossMonthly - st) * s.nicEr.ratePct/100);
 }
+// ── Pro-rata / back-pay engine (weekday-based) ───────────────────────
+// Calendar-month bounds (as YYYY-MM-DD strings) for a 'YYYY-MM' period.
+function periodMonthBounds(period){
+  const [y,m] = period.split('-').map(Number);
+  const last = new Date(y, m, 0).getDate();
+  return { start: `${period}-01`, end: `${period}-${String(last).padStart(2,'0')}` };
+}
+// Fraction of the period month an employee is actually employed (weekday-based).
+// Returns { factor, workedWeekdays, totalWeekdays, isStarter, isLeaver }.
+function monthEmploymentFactor(emp, period){
+  const { start:ms, end:me } = periodMonthBounds(period);
+  const total = workingDays(ms, me);
+  const s = emp.start_date || null;
+  const en = emp.end_date || null;
+  const wf = (s && s > ms) ? s : ms;
+  const wt = (en && en < me) ? en : me;
+  const isStarter = !!(s && s >= ms && s <= me);
+  const isLeaver  = !!(en && en >= ms && en <= me);
+  if (!total || wt < wf) return { factor: 0, workedWeekdays: 0, totalWeekdays: total, isStarter, isLeaver };
+  const worked = workingDays(wf, wt);
+  return { factor: worked/total, workedWeekdays: worked, totalWeekdays: total, isStarter, isLeaver };
+}
+function nextPeriod(period){ let [y,m]=period.split('-').map(Number); m++; if(m>12){m=1;y++;} return `${y}-${String(m).padStart(2,'0')}`; }
+function previousPeriod(period){ let [y,m]=period.split('-').map(Number); m--; if(m<1){m=12;y--;} return `${y}-${String(m).padStart(2,'0')}`; }
+// Full pro-rata context for an employee in a pay-run period, incl. back pay.
+async function employmentProRata(emp, period){
+  const cur = monthEmploymentFactor(emp, period);
+  let backPay = null;
+  // Back pay: ONLY for someone who started in the immediately prior month and
+  // wasn't paid that month (e.g. added after the prior run). Bounded to that one
+  // month so existing long-serving staff never trigger it (e.g. a first pay run).
+  const prevP = previousPeriod(period);
+  if (emp.start_date && emp.start_date.slice(0,7) === prevP){
+    const slips = await idbByIndex('payslips','employee_id',emp.id);
+    const runs = await idbGetAll('pay_runs');
+    const runMap = Object.fromEntries(runs.map(r=>[r.id,r]));
+    const paidPrior = slips.some(s => runMap[s.pay_run_id]?.period === prevP);
+    if (!paidPrior){
+      const f = monthEmploymentFactor(emp, prevP).factor;
+      if (f > 0){
+        backPay = {
+          basic: (Number(emp.salary)||0)/12 * f,
+          car_allowance: (Number(emp.car_allowance_monthly)||0) * f,
+          car_sacrifice: (Number(emp.car_sacrifice_monthly)||0) * f,
+          months: [prevP]
+        };
+      }
+    }
+  }
+  return { ...cur, partial: cur.factor>0 && cur.factor<1, period, backPay };
+}
+
 // Build a fully calculated set of payslip lines for one employee.
-// ctx is the PAYE context (M1 flag + YTD priors). Pass undefined for default M1.
+// ctx is the PAYE context (M1 flag + YTD priors + optional proRata). Pass undefined for default M1.
 async function buildCalculatedLines(emp, settings, ctx){
   if (!settings) settings = await getPayrollSettings();
-  const basic     = toMoney((Number(emp.salary)||0)/12);
-  const carAll    = toMoney(Number(emp.car_allowance_monthly)||0);
-  const carSac    = toMoney(Number(emp.car_sacrifice_monthly)||0);
+  const pr = ctx?.proRata || null;
+  const factor = pr ? pr.factor : 1;
+  const fullBasic = (Number(emp.salary)||0)/12;
+  const basic     = toMoney(fullBasic * factor);
+  const carAll    = toMoney((Number(emp.car_allowance_monthly)||0) * factor);
+  const carSac    = toMoney((Number(emp.car_sacrifice_monthly)||0) * factor);
   const penSacPct = Number(emp.pension_sacrifice_pct)||0;
   const erPenPct  = Number(emp.employer_pension_pct)||0;
-  const penSac    = toMoney(basic * penSacPct/100);
-  const erPension = toMoney(basic * erPenPct/100);
+  const penSac    = toMoney(basic * penSacPct/100);   // off pro-rated basic
+  const erPension = toMoney(basic * erPenPct/100);    // off pro-rated basic
+
+  // For partial months show Qty = worked weekdays, Rate = daily rate (transparent pro-rata).
+  const dr = (v) => (pr && pr.totalWeekdays) ? toMoney(v/pr.totalWeekdays) : v;
+  const payLine = (code,label,monthlyVal,signedAmount) => {
+    if (pr && pr.partial) return { code, label, category:'payment', units: pr.workedWeekdays, rate: dr(monthlyVal), amount: signedAmount };
+    return { code, label, category:'payment', units:1, rate: signedAmount, amount: signedAmount };
+  };
 
   const lines = [];
-  lines.push({ code:'basic_pay',     label:'Basic Pay',                  category:'payment',  units:1, rate:basic,  amount:basic });
-  if (carAll) lines.push({ code:'car_allowance', label:'Car Allowance', category:'payment',  units:1, rate:carAll, amount:carAll });
+  lines.push(payLine('basic_pay','Basic Pay', fullBasic, basic));
+  if (carAll) lines.push(payLine('car_allowance','Car Allowance', Number(emp.car_allowance_monthly)||0, carAll));
   if (penSac) lines.push({ code:'pension_sacrifice', label:'Salary Sacrifice (Pension)', category:'payment', units:1, rate:-penSac, amount:-penSac });
-  if (carSac) lines.push({ code:'car_sacrifice',     label:'Salary Sacrifice (Car)',     category:'payment', units:1, rate:-carSac, amount:-carSac });
+  if (carSac) lines.push(payLine('car_sacrifice','Salary Sacrifice (Car)', -(Number(emp.car_sacrifice_monthly)||0), -carSac));
+
+  // Back pay for an unpaid new starter (basic + car allowance + car sacrifice for missed months).
+  if (pr && pr.backPay){
+    const bp = pr.backPay;
+    const net = toMoney(bp.basic + bp.car_allowance + bp.car_sacrifice);
+    const label = bp.months.length===1 ? `Back Pay (${periodLabel(bp.months[0])})` : `Back Pay (${bp.months.length} months)`;
+    lines.push({ code:'back_pay', label, category:'payment', units:1, rate:net, amount:net });
+  }
 
   // Carry-forward components (recurring=true, e.g. First Aid / HSE / Fire Marshal):
   // these are STICKY, not defaulted. They appear this month ONLY if they were on
@@ -2088,13 +2159,24 @@ async function createPayRun(ev){
   const runId = uuid();
   await idbPut('pay_runs', { id:runId, period, pay_date:payDate, status:'draft', created_at:nowISO(), finalised_at:null, created_by:state.user.username });
   const settings = await getPayrollSettings();
-  const active = state.employees.filter(e=>e.status==='active');
-  for (const e of active){
+  // Include any employee whose employment overlaps this pay-run month, regardless
+  // of status (active / on_leave / leaver) — i.e. start_date is on/before month end
+  // and they hadn't already left before the month started.
+  const { start:monthStart, end:monthEnd } = periodMonthBounds(period);
+  const included = state.employees.filter(e => {
+    if (!e.start_date) return e.status==='active';
+    if (e.start_date > monthEnd) return false;
+    if (e.end_date && e.end_date < monthStart) return false;
+    return true;
+  });
+  for (const e of included){
     const ctx = { m1: !!e.tax_code_m1 };
     if (!ctx.m1){ Object.assign(ctx, await getYtdContext(e.id, period)); }
     // Carry recurring components forward at last month's actual value.
     const prior = await priorMonthPayslip(e.id, period);
     if (prior) ctx.priorLines = prior.p.lines;
+    // Pro-rata / back pay for starters and leavers.
+    ctx.proRata = await employmentProRata(e, period);
     const lines = await buildCalculatedLines(e, settings, ctx);
     const t = payslipTotals(lines);
     await idbPut('payslips', { id:uuid(), pay_run_id:runId, employee_id:e.id, lines, gross_pay:t.gross, total_deductions:t.deductions, net_pay:t.net, employer_ni:t.employer_ni, employer_pension:t.employer_pension, tax_code_at_pay:e.tax_code||'', tax_basis_at_pay:(e.tax_code_m1?'M1':'Cumulative'), ni_number_at_pay:e.ni_number||'', personnel_number_at_pay:e.employee_number||'', created_at:nowISO(), updated_at:nowISO() });
@@ -2293,9 +2375,12 @@ function payslipNext(){ payslipNeighbour('next'); }
 function payslipPrev(){ payslipNeighbour('prev'); }
 async function buildPayrollContextFor(emp, payRunId){
   const ctx = { m1: !!emp.tax_code_m1 };
-  if (!ctx.m1 && payRunId){
+  if (payRunId){
     const run = await idbGet('pay_runs', payRunId);
-    if (run?.period) Object.assign(ctx, await getYtdContext(emp.id, run.period));
+    if (run?.period){
+      if (!ctx.m1) Object.assign(ctx, await getYtdContext(emp.id, run.period));
+      ctx.proRata = await employmentProRata(emp, run.period);  // for "Reset from defaults"
+    }
   }
   return ctx;
 }
