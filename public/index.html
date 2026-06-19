@@ -1743,6 +1743,8 @@ const DEFAULT_PAY_COMPONENTS = [
   { code:'first_aid',         label:'First Aid',                  category:'payment',   recurring:false, default_amount:15, display_order:30, enabled:true, value_type:'fixed', system:true },
   { code:'hse',               label:'HSE',                        category:'payment',   recurring:false, default_amount:15, display_order:31, enabled:true, value_type:'fixed', system:true },
   { code:'fire_marshal',      label:'Fire Marshal',               category:'payment',   recurring:false, default_amount:15, display_order:32, enabled:true, value_type:'fixed', system:true },
+  { code:'bonus',             label:'Bonus',                      category:'payment',   recurring:false, default_amount:0,  display_order:33, enabled:true, value_type:'fixed', system:true },
+  { code:'commission',        label:'Commission',                 category:'payment',   recurring:false, default_amount:0,  display_order:34, enabled:true, value_type:'fixed', system:true },
   { code:'pension_sacrifice', label:'Salary Sacrifice (Pension)', category:'payment',   recurring:false, default_amount:0,  display_order:40, enabled:true, value_type:'calculated', system:true },
   { code:'car_sacrifice',     label:'Salary Sacrifice (Car)',     category:'payment',   recurring:false, default_amount:0,  display_order:41, enabled:true, value_type:'employee_linked', linked_field:'car_sacrifice_monthly', system:true },
   { code:'paye',              label:'PAYE',                       category:'deduction', recurring:false, default_amount:0,  display_order:50, enabled:true, value_type:'calculated', system:true },
@@ -1760,9 +1762,16 @@ async function seedPayComponentsIfEmpty(){
     await idbPut('pay_components', { id: uuid(), ...c });
   }
 }
-// Backfill value_type / linked_field onto pay components seeded by earlier versions.
+// Backfill value_type / linked_field onto pay components seeded by earlier versions,
+// and add any newer default components that aren't in the database yet.
 async function migratePayComponents(){
   const existing = await idbGetAll('pay_components');
+  if (existing.length){
+    const haveCodes = new Set(existing.map(c=>c.code));
+    for (const def of DEFAULT_PAY_COMPONENTS){
+      if (!haveCodes.has(def.code)) await idbPut('pay_components', { id: uuid(), ...def });
+    }
+  }
   for (const c of existing){
     const def = DEFAULT_PAY_COMPONENTS.find(d => d.code === c.code);
     if (!def) continue;
