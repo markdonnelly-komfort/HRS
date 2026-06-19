@@ -2002,6 +2002,23 @@ async function buildCalculatedLines(emp, settings, ctx){
   if (penSac) lines.push({ code:'pension_sacrifice', label:'Salary Sacrifice (Pension)', category:'payment', units:1, rate:-penSac, amount:-penSac });
   if (carSac) lines.push({ code:'car_sacrifice',     label:'Salary Sacrifice (Car)',     category:'payment', units:1, rate:-carSac, amount:-carSac });
 
+  // Auto-add any OTHER enabled+recurring components (e.g. Fire Marshal set to
+  // recurring). The basic/car/sacrifice and the engine-calculated items are
+  // already handled above, so they're excluded here.
+  const handled = new Set(['basic_pay','car_allowance','car_sacrifice','pension_sacrifice','paye','nic_ee','ni_er','pension_er']);
+  const recurringExtras = (await idbGetAll('pay_components'))
+    .filter(c => c.enabled && c.recurring && !handled.has(c.code))
+    .sort((a,b)=>(a.display_order||0)-(b.display_order||0));
+  for (const c of recurringExtras){
+    const vt = c.value_type || 'fixed';
+    if (vt === 'fixed'){
+      const amt = toMoney(Number(c.default_amount)||0);
+      lines.push({ code:c.code, label:c.label, category:c.category, units:1, rate:amt, amount:amt });
+    }
+    // hourly_multiplier / calculated recurring extras are skipped — they need
+    // per-period hours or are computed by the engine.
+  }
+
   const grossTaxable = toMoney(lines.filter(l=>l.category==='payment').reduce((a,l)=>a+l.amount,0));
   const payeCtx = ctx || { m1: !!emp.tax_code_m1 };
   const paye   = calcPAYE(grossTaxable, emp.tax_code||'1257L', settings, payeCtx);
