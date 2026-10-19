@@ -565,6 +565,7 @@ const NAV = {
     { id:'my-other',      label:'My Other Absences',ic:'⋯' },
     { id:'my-performance',label:'My Performance',   ic:'★' },
     { id:'my-training',   label:'My Training',      ic:'✪' },
+    { id:'my-payslips',   label:'My Payslips',      ic:'£', badge:'newPayDocs' },
     { id:'org-chart',     label:'Organisation Chart',ic:'☷' },
     { id:'documents',     label:'Documents',        ic:'▤' },
     { id:'tasks',         label:'My Tasks',         ic:'✔', badge:'openTasks' }
@@ -611,7 +612,7 @@ async function computeBadges(){
   }
   // Pay documents the employee hasn't opened yet
   let newPayDocs = 0;
-  if (state.user.role === 'employee' && state.user.employee_id){
+  if ((state.user.role === 'employee' || state.user.role === 'manager') && state.user.employee_id){
     newPayDocs = (await idbByIndex('pay_documents','employee_id',state.user.employee_id)).filter(d=>!d.viewed_at).length;
   }
   return {
@@ -1771,10 +1772,11 @@ function payDocGroups(docs, admin){
     return list.length ? `<h4 style="margin:14px 0 8px">${PAY_DOC_PLURAL[t]}</h4>${list.map(d=>payDocRow(d,admin)).join('')}` : '';
   }).join('');
 }
-// Employee view (employee logins only)
+// Own pay documents (employee + manager logins). Always scoped to the
+// signed-in person's own employee record — never anyone else's.
 async function renderMyPayslips(c){
   const id = state.user.employee_id;
-  if (state.user.role!=='employee' || !id){ c.innerHTML='<div class="empty">Not available.</div>'; return; }
+  if (!['employee','manager'].includes(state.user.role) || !id){ c.innerHTML='<div class="empty">Not available.</div>'; return; }
   const docs = await idbByIndex('pay_documents','employee_id',id);
   const latest = docs.filter(d=>d.doc_type==='payslip').sort((a,b)=>(b.period||'').localeCompare(a.period||''))[0];
   c.innerHTML = `
@@ -1819,7 +1821,8 @@ async function savePayDoc(ev, empId){
 async function openPayDoc(id, download){
   const d = await idbGet('pay_documents', id);
   if (!d) return;
-  const own = state.user.role==='employee' && d.employee_id===state.user.employee_id;
+  // Owner only (employee or manager opening their OWN document) — or HR admin.
+  const own = !!state.user.employee_id && d.employee_id===state.user.employee_id;
   if (state.user.role!=='hr_admin' && !own){ toast('Not permitted','error'); return; }
   openStoredFile(d, download);
   await logAction('pay_document_open', { employee_id: d.employee_id });
