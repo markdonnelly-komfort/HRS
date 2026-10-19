@@ -177,6 +177,33 @@
     .doc-row .dic { font-size: 1.6rem; }
     .doc-row .di { flex: 1; min-width: 0; }
     .doc-row .di .t { font-weight: 600; }
+    .doc-row .di .small { overflow-wrap: anywhere; }
+
+    /* ── Organisation chart (top-down tree with connector lines) ── */
+    .org-wrap { overflow-x: auto; padding: 4px 0 12px; }
+    .org-tree { display: flex; justify-content: center; min-width: max-content; }
+    .org-tree ul { position: relative; display: flex; justify-content: center; margin: 0; padding: 20px 0 0; }
+    .org-tree > ul { padding-top: 0; }
+    .org-tree li { list-style: none; position: relative; text-align: center; padding: 20px 6px 0; }
+    .org-tree li::before, .org-tree li::after { content: ''; position: absolute; top: 0; right: 50%; width: 50%; height: 20px; border-top: 2px solid #c8ccd0; }
+    .org-tree li::after { right: auto; left: 50%; border-left: 2px solid #c8ccd0; }
+    .org-tree li:only-child::before, .org-tree li:only-child::after { display: none; }
+    .org-tree li:only-child { padding-top: 0; }
+    .org-tree li:first-child::before, .org-tree li:last-child::after { border: 0 none; }
+    .org-tree li:last-child::before { border-right: 2px solid #c8ccd0; border-radius: 0 6px 0 0; }
+    .org-tree li:first-child::after { border-radius: 6px 0 0 0; }
+    .org-tree ul ul::before { content: ''; position: absolute; top: 0; left: 50%; height: 20px; border-left: 2px solid #c8ccd0; }
+    .org-tree > ul > li { padding-top: 0; }
+    .org-tree > ul > li::before, .org-tree > ul > li::after { display: none; }
+    .org-node { display: inline-block; width: 168px; background: var(--card); border: 1px solid var(--border); border-top: 4px solid var(--accent); border-radius: 10px; padding: 10px 8px; box-shadow: var(--shadow); cursor: pointer; transition: opacity .15s, box-shadow .15s, transform .15s; }
+    .org-node:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(64,64,66,0.18); }
+    .org-node .avatar { margin-bottom: 6px; }
+    .org-node .org-name { font-weight: 700; color: var(--primary); font-size: 0.9rem; }
+    .org-node .org-title { font-size: 0.8rem; color: var(--text); margin-top: 2px; }
+    .org-node .org-meta { font-size: 0.72rem; color: var(--text-light); margin-top: 2px; }
+    .org-node.me { border-top-color: var(--primary-light); background: #fffbea; }
+    .org-node.dim { opacity: .3; }
+    .org-node.hit { outline: 3px solid var(--accent); outline-offset: 2px; }
 
     @media (max-width: 860px){
       .sidebar { transform: translateX(-100%); }
@@ -259,8 +286,9 @@ const DB_NAME = 'KomfortHR';
 // v4: payroll feature removed. Version is kept above the old payroll schema (v3)
 // so browsers that ran the payroll build upgrade cleanly (and have the payroll
 // object stores dropped) rather than hitting an IndexedDB version-downgrade error.
-const DB_VERSION = 4;
-const STORES = ['users','employees','contacts','documents','leave','reviews','objectives','tasks','audit_log','settings'];
+// v5: training records + uploaded pay documents (payslips / P60 / P11D).
+const DB_VERSION = 5;
+const STORES = ['users','employees','contacts','documents','leave','reviews','objectives','tasks','audit_log','settings','training','pay_documents'];
 let db = null;
 
 function openDB() {
@@ -311,6 +339,14 @@ function openDB() {
       }
       if (!d.objectStoreNames.contains('settings')) {
         d.createObjectStore('settings', { keyPath: 'key' });
+      }
+      if (!d.objectStoreNames.contains('training')) {
+        const s = d.createObjectStore('training', { keyPath: 'id' });
+        s.createIndex('employee_id', 'employee_id');
+      }
+      if (!d.objectStoreNames.contains('pay_documents')) {
+        const s = d.createObjectStore('pay_documents', { keyPath: 'id' });
+        s.createIndex('employee_id', 'employee_id');
       }
       // Drop payroll stores from any browser that ran the removed payroll build.
       ['pay_components','pay_runs','payslips','recurring_deductions'].forEach(s => {
@@ -421,6 +457,14 @@ async function seedDefaults(){
   await idbPut('objectives', { id:uuid(), employee_id:empId, title:'Complete forklift certification', description:'Obtain counterbalance forklift licence to support warehouse operations.', target_date:thisYear()+'-09-30', status:'in_progress', progress:60, created_at:nowISO() });
   await idbPut('objectives', { id:uuid(), employee_id:empId, title:'Reduce material waste by 5%', description:'Improve cutting efficiency on the production line.', target_date:thisYear()+'-12-31', status:'not_started', progress:0, created_at:nowISO() });
 
+  // Sample training records (one valid, one expiring soon, one expired, one no-expiry)
+  const tr = (emp, title, category, provider, completed, expiry) => idbPut('training', { id:uuid(), employee_id:emp, title, category, provider, completed_date:completed, expiry_date:expiry, notes:'', file:null, added_by:'admin', created_at:nowISO() });
+  await tr(empId, 'Manual Handling', 'Manual Handling', 'Komfort (in-house)', addDays(today(),-200), addDays(today(),530));
+  await tr(empId, 'Emergency First Aid at Work', 'First Aid', 'St John Ambulance', addDays(today(),-1060), addDays(today(),35));
+  await tr(e4, 'IPAF Mobile Elevating Work Platform', 'Working at Height', 'IPAF', addDays(today(),-1830), addDays(today(),-25));
+  await tr(e3, 'Company Induction', 'Induction', 'Komfort (in-house)', addDays(today(),-150), null);
+  await tr(mgrId, 'Fire Marshal', 'Fire Marshal', 'Leeds Fire Safety Ltd', addDays(today(),-300), addDays(today(),795));
+
   // Sample review
   await idbPut('reviews', { id:uuid(), employee_id:empId, type:'mid_year', period:thisYear(), scheduled_date:thisYear()+'-06-15', status:'scheduled', reviewer_id:mgrId, self_assessment:'', manager_comments:'', overall_rating:'', completed_at:null, created_at:nowISO() });
 
@@ -494,11 +538,14 @@ const NAV = {
   hr_admin: [
     { id:'dashboard',     label:'Dashboard',        ic:'▦' },
     { id:'employees',     label:'Employees',        ic:'☺' },
+    { id:'org-chart',     label:'Organisation Chart',ic:'☷' },
     { id:'leave-holiday', label:'Holiday',          ic:'✈', badge:'pendingHoliday' },
     { id:'leave-sickness',label:'Sickness',         ic:'＋', badge:'pendingSickness' },
     { id:'leave-other',   label:'Other Absences',   ic:'⋯', badge:'pendingOther' },
     { id:'performance',   label:'Performance',      ic:'★' },
+    { id:'training',      label:'Training',         ic:'✪', badge:'trainingDue' },
     { id:'documents',     label:'Documents',        ic:'▤' },
+    { id:'payslip-uploads',label:'Payslip Uploads', ic:'£' },
     { id:'reports',       label:'Reports',          ic:'▣' },
     { id:'tasks',         label:'HR Tasks',         ic:'✔', badge:'openTasks' },
     { id:'users',         label:'User Accounts',    ic:'⚷' },
@@ -511,11 +558,14 @@ const NAV = {
     { id:'leave-sickness',label:'Team Sickness',    ic:'＋', badge:'pendingSickness' },
     { id:'leave-other',   label:'Team Absences',    ic:'⋯', badge:'pendingOther' },
     { id:'performance',   label:'Team Performance', ic:'★' },
+    { id:'training',      label:'Team Training',    ic:'✪', badge:'trainingDue' },
     { id:'my-profile',    label:'My Profile',       ic:'☺' },
     { id:'my-leave',      label:'My Holiday',       ic:'✈' },
     { id:'my-sickness',   label:'My Sickness',      ic:'＋' },
     { id:'my-other',      label:'My Other Absences',ic:'⋯' },
     { id:'my-performance',label:'My Performance',   ic:'★' },
+    { id:'my-training',   label:'My Training',      ic:'✪' },
+    { id:'org-chart',     label:'Organisation Chart',ic:'☷' },
     { id:'documents',     label:'Documents',        ic:'▤' },
     { id:'tasks',         label:'My Tasks',         ic:'✔', badge:'openTasks' }
   ],
@@ -525,6 +575,9 @@ const NAV = {
     { id:'my-sickness',   label:'My Sickness',      ic:'＋' },
     { id:'my-other',      label:'My Other Absences',ic:'⋯' },
     { id:'my-performance',label:'My Performance',   ic:'★' },
+    { id:'my-training',   label:'My Training',      ic:'✪' },
+    { id:'my-payslips',   label:'My Payslips',      ic:'£', badge:'newPayDocs' },
+    { id:'org-chart',     label:'Organisation Chart',ic:'☷' },
     { id:'documents',     label:'Company Documents',ic:'▤' }
   ]
 };
@@ -550,13 +603,26 @@ async function computeBadges(){
   }
   let openTasks = tasks.filter(t => t.status !== 'done');
   if (state.user.role === 'manager') openTasks = openTasks.filter(t => t.assigned_to === state.user.id);
+  // Training expired / expiring within 60 days (HR: everyone; manager: team)
+  let trainingDue = 0;
+  if (state.user.role !== 'employee'){
+    const scope = state.user.role==='manager' ? teamMemberIds() : null;
+    trainingDue = (await idbGetAll('training')).filter(r => (!scope || scope.includes(r.employee_id)) && isActiveEmp(r.employee_id) && ['expired','expiring'].includes(trainingStatus(r).key)).length;
+  }
+  // Pay documents the employee hasn't opened yet
+  let newPayDocs = 0;
+  if (state.user.role === 'employee' && state.user.employee_id){
+    newPayDocs = (await idbByIndex('pay_documents','employee_id',state.user.employee_id)).filter(d=>!d.viewed_at).length;
+  }
   return {
     pendingHoliday: pending.filter(l=>l.type==='holiday').length,
     pendingSickness: pending.filter(l=>l.type==='sickness').length,
     pendingOther: pending.filter(l=>OTHER_ABSENCE.includes(l.type)).length,
-    openTasks: openTasks.length
+    openTasks: openTasks.length,
+    trainingDue, newPayDocs
   };
 }
+function isActiveEmp(id){ const e = empById(id); return !!e && e.status !== 'leaver'; }
 
 function teamMemberIds(){
   if (!state.user.employee_id) return [];
@@ -573,7 +639,7 @@ async function navigate(page){
   document.getElementById('sidebar').classList.remove('open');
   await refreshCaches();
   const mgr = state.user.role==='manager';
-  const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', 'leave-holiday':mgr?'Team Holiday':'Holiday', 'leave-sickness':mgr?'Team Sickness':'Sickness', 'leave-other':mgr?'Team Absences':'Other Absences', performance:mgr?'Team Performance':'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: mgr?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-sickness':'My Sickness', 'my-other':'My Other Absences', 'my-performance':'My Performance' };
+  const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', 'leave-holiday':mgr?'Team Holiday':'Holiday', 'leave-sickness':mgr?'Team Sickness':'Sickness', 'leave-other':mgr?'Team Absences':'Other Absences', performance:mgr?'Team Performance':'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: mgr?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-sickness':'My Sickness', 'my-other':'My Other Absences', 'my-performance':'My Performance', training: mgr?'Team Training':'Training', 'my-training':'My Training', 'my-payslips':'My Payslips', 'payslip-uploads':'Payslip Uploads', 'org-chart':'Organisation Chart' };
   document.getElementById('page-title').textContent = titles[page] || page;
   const c = document.getElementById('content');
   c.innerHTML = '<div class="empty">Loading…</div>';
@@ -596,6 +662,11 @@ async function navigate(page){
       case 'my-sickness': await renderMySickness(c); break;
       case 'my-other': await renderMyOther(c); break;
       case 'my-performance': await renderMyPerformance(c); break;
+      case 'training': await renderTraining(c); break;
+      case 'my-training': await renderMyTraining(c); break;
+      case 'my-payslips': await renderMyPayslips(c); break;
+      case 'payslip-uploads': await renderPayslipUploads(c); break;
+      case 'org-chart': await renderOrgChart(c); break;
       default: c.innerHTML = '<div class="empty">Page not found</div>';
     }
   } catch(err){ console.error(err); c.innerHTML = `<div class="empty">Error: ${err.message}</div>`; }
@@ -739,6 +810,8 @@ async function renderDashboard(c){
   // Probation reviews coming up (next 45 days) or overdue, for active staff
   const probDue = active.filter(e => e.probation_end_date && e.probation_end_date <= addDays(today(),45))
     .sort((a,b)=>a.probation_end_date.localeCompare(b.probation_end_date));
+  // Training certificates expired or expiring within 60 days
+  const trainingDue = (await idbGetAll('training')).filter(r => (!isMgr || teamMemberIds().includes(r.employee_id)) && isActiveEmp(r.employee_id) && ['expired','expiring'].includes(trainingStatus(r).key));
 
   c.innerHTML = `
     <div class="stat-grid">
@@ -747,6 +820,7 @@ async function renderDashboard(c){
       <div class="stat warn clickable" onclick="openDashList('pending')"><div class="num">${pending.length}</div><div class="lbl">Leave to approve</div></div>
       <div class="stat ${sickDays>0?'warn':'ok'} clickable" onclick="openDashList('sick')"><div class="num">${sickDays}</div><div class="lbl">Sick days (${bounds.label})</div></div>
       <div class="stat ${probDue.length?'warn':''} clickable" onclick="openDashList('probation')"><div class="num">${probDue.length}</div><div class="lbl">Probation reviews due</div></div>
+      <div class="stat ${trainingDue.length?'warn':'ok'} clickable" onclick="openDashList('training')"><div class="num">${trainingDue.length}</div><div class="lbl">Training expiring / expired</div></div>
       <div class="stat clickable" onclick="openDashList('tasks')"><div class="num">${myTasks.length}</div><div class="lbl">Open tasks</div></div>
     </div>
 
@@ -811,6 +885,11 @@ async function openDashList(kind){
     title = `Probation reviews due (${list.length})`;
     html = tableWrap('<th>Employee</th><th>Job title</th><th>Manager</th><th>Probation ends</th>',
       list.map(e=>`<tr class="clickable" onclick="closeModal();employeeDetail('${e.id}')"><td>${esc(e.first_name+' '+e.last_name)}</td><td>${esc(e.job_title)}</td><td>${e.manager_id?esc(empName(e.manager_id)):'—'}</td><td>${fmtDate(e.probation_end_date)} ${e.probation_end_date<today()?'<span class="badge b-red">Overdue</span>':'<span class="badge b-amber">Due soon</span>'}</td></tr>`).join(''), 'No probation reviews due.');
+  } else if (kind==='training'){
+    const list = (await idbGetAll('training')).filter(r => inScope(r.employee_id) && isActiveEmp(r.employee_id) && ['expired','expiring'].includes(trainingStatus(r).key)).sort((a,b)=>(a.expiry_date||'').localeCompare(b.expiry_date||''));
+    title = `Training expiring / expired (${list.length})`;
+    html = tableWrap('<th>Employee</th><th>Course</th><th>Expires</th><th>Status</th>',
+      list.map(r=>`<tr class="clickable" onclick="closeModal();employeeDetail('${r.employee_id}')"><td>${esc(empName(r.employee_id))}</td><td>${esc(r.title)}</td><td>${fmtDate(r.expiry_date)}</td><td>${trainingStatusBadge(r)}</td></tr>`).join(''), 'Nothing expiring in the next 60 days.');
   } else if (kind==='tasks'){
     let list = (await idbGetAll('tasks')).filter(t=>t.status!=='done');
     if (isMgr) list = list.filter(t=>t.assigned_to===state.user.id);
@@ -896,7 +975,9 @@ async function employeeDetail(id){
       <div class="tab" onclick="empTab('sickness',this)">Sickness</div>
       <div class="tab" onclick="empTab('other',this)">Other absence</div>
       <div class="tab" onclick="empTab('performance',this)">Performance</div>
+      <div class="tab" onclick="empTab('training',this)">Training</div>
       <div class="tab" onclick="empTab('documents',this)">Documents</div>
+      ${canEdit?`<div class="tab" onclick="empTab('payslips',this)">Payslips</div>`:''}
     </div>
     <div id="emp-tab-body"></div>`;
   window._detailEmp = id;
@@ -916,7 +997,9 @@ function empTab(tab, el){
     sickness: ()=>empTabSickness(body,id),
     other: ()=>empTabOther(body,id),
     performance: ()=>empTabPerformance(body,id),
-    documents: ()=>empTabDocuments(body,id)
+    training: ()=>empTabTraining(body,id),
+    documents: ()=>empTabDocuments(body,id),
+    payslips: ()=>empTabPayDocs(body,id)
   })[tab]();
 }
 // Re-render whichever employee-detail tab is currently active (after a save/delete).
@@ -1467,6 +1550,466 @@ async function downloadDoc(id){
   await logAction('document_download', { document_id:id });
 }
 async function deleteDoc(id){ if(!confirm('Delete this document?'))return; const d=await idbGet('documents',id); await idbDelete('documents',id); toast('Deleted'); if(d&&d.employee_id){ empTab('documents',[...document.querySelectorAll('#emp-tabs .tab')].find(t=>t.textContent.includes('Documents'))); } else navigate('documents'); }
+
+// ── Shared stored-file helpers (training certificates, pay documents) ──
+const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
+function dataURLtoBlob(dataUrl){
+  const [head, b64] = dataUrl.split(',');
+  const mime = (head.match(/data:([^;]+)/)||[])[1] || 'application/octet-stream';
+  const bin = atob(b64); const arr = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+// View a stored file {data, filename} in a new tab, or download it.
+function openStoredFile(file, download){
+  if (!file || !file.data){ toast('No file attached','error'); return; }
+  const url = URL.createObjectURL(dataURLtoBlob(file.data));
+  const save = () => { const a=document.createElement('a'); a.href=url; a.download=file.filename||'document'; a.click(); };
+  if (download) save(); else if (!window.open(url, '_blank')) save();
+  setTimeout(()=>URL.revokeObjectURL(url), 60000);
+}
+function monthLabel(ym){ if(!ym || !/^\d{4}-\d{2}$/.test(ym)) return ym||'—'; const [y,m]=ym.split('-').map(Number); return new Date(y,m-1,1).toLocaleDateString('en-GB',{month:'long',year:'numeric'}); }
+// UK tax years (6 Apr), current first.
+function recentTaxYearLabels(n=5){ const d=new Date(); let y=d.getFullYear(); if (d < new Date(y,3,6)) y--; return Array.from({length:n},(_,i)=>`${y-i}/${String(y-i+1).slice(2)}`); }
+
+// ═══════════════════════════════════════════════
+// TRAINING
+// ═══════════════════════════════════════════════
+const TRAINING_CATEGORIES = ['Health & Safety','First Aid','Fire Marshal','Manual Handling','Working at Height','Induction','Technical / Product','Driving / Plant','Management','CPD','Other'];
+const TRAINING_EXPIRY_WARN_DAYS = 60;
+function trainingStatus(r){
+  if (!r.expiry_date) return { key:'none', label:'No expiry', cls:'b-grey' };
+  if (r.expiry_date < today()) return { key:'expired', label:'Expired', cls:'b-red' };
+  if (r.expiry_date <= addDays(today(), TRAINING_EXPIRY_WARN_DAYS)) return { key:'expiring', label:'Expiring soon', cls:'b-amber' };
+  return { key:'valid', label:'Valid', cls:'b-green' };
+}
+function trainingStatusBadge(r){ const s=trainingStatus(r); return `<span class="badge ${s.cls}">${s.label}</span>`; }
+// HR: anyone. Manager: their team. Employee: only records they added themselves.
+function canEditTraining(r){
+  const role = state.user.role;
+  if (role==='hr_admin') return true;
+  if (role==='manager' && teamMemberIds().includes(r.employee_id)) return true;
+  return r.employee_id===state.user.employee_id && r.added_by===state.user.username;
+}
+function canViewTrainingFor(empId){
+  const role = state.user.role;
+  return role==='hr_admin' || empId===state.user.employee_id || (role==='manager' && teamMemberIds().includes(empId));
+}
+const sortTraining = (a,b) => (b.completed_date||'').localeCompare(a.completed_date||'');
+function trainingTable(list, showEmp, emptyMsg){
+  if (!list.length) return `<div class="empty small">${emptyMsg}</div>`;
+  return `<div class="table-wrap"><table><thead><tr>${showEmp?'<th>Employee</th>':''}<th>Course / qualification</th><th>Category</th><th>Provider</th><th>Completed</th><th>Expires</th><th>Status</th><th></th></tr></thead><tbody>${
+    list.map(r=>`<tr>${showEmp?`<td>${esc(empName(r.employee_id))}</td>`:''}<td><strong>${esc(r.title)}</strong>${r.notes?`<div class="small muted">${esc(r.notes)}</div>`:''}</td><td class="small">${esc(r.category)||'—'}</td><td class="small">${esc(r.provider)||'—'}</td><td>${fmtDate(r.completed_date)}</td><td>${r.expiry_date?fmtDate(r.expiry_date):'—'}</td><td>${trainingStatusBadge(r)}</td><td style="text-align:right;white-space:nowrap">${r.file?`<button class="btn btn-outline btn-sm" onclick="openTrainingCert('${r.id}')" title="${esc(r.file.filename)}">Certificate</button> `:''}${canEditTraining(r)?`<button class="btn btn-outline btn-sm" onclick="trainingForm({id:'${r.id}'})">Edit</button> <button class="btn btn-danger btn-sm" onclick="deleteTraining('${r.id}')">×</button>`:''}</td></tr>`).join('')
+  }</tbody></table></div>`;
+}
+async function renderTraining(c){
+  if (state.user.role==='employee'){ navigate('my-training'); return; }
+  const isMgr = state.user.role==='manager';
+  const scope = isMgr ? teamMemberIds() : null;
+  const all = (await idbGetAll('training')).filter(r => empById(r.employee_id) && (!scope || scope.includes(r.employee_id)));
+  window._trainingAll = all;
+  setTopbar(`${isMgr?'':'<button class="btn btn-outline" onclick="exportTraining()">Export CSV</button> '}<button class="btn btn-accent" onclick="trainingForm({})">+ Add training record</button>`);
+  const cnt = k => all.filter(r => isActiveEmp(r.employee_id) && trainingStatus(r).key===k).length;
+  c.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat"><div class="num">${all.length}</div><div class="lbl">Training records</div></div>
+      <div class="stat ok"><div class="num">${cnt('valid')}</div><div class="lbl">Valid</div></div>
+      <div class="stat warn"><div class="num">${cnt('expiring')}</div><div class="lbl">Expiring within ${TRAINING_EXPIRY_WARN_DAYS} days</div></div>
+      <div class="stat ${cnt('expired')?'warn':'ok'}"><div class="num">${cnt('expired')}</div><div class="lbl">Expired</div></div>
+    </div>
+    <div class="toolbar">
+      <input class="grow" id="tr-search" placeholder="Search employee, course or provider…" oninput="filterTraining()">
+      <select id="tr-cat" onchange="filterTraining()"><option value="">All categories</option>${TRAINING_CATEGORIES.map(x=>`<option>${esc(x)}</option>`).join('')}</select>
+      <select id="tr-status" onchange="filterTraining()"><option value="">All statuses</option><option value="expired">Expired</option><option value="expiring">Expiring soon</option><option value="valid">Valid</option><option value="none">No expiry</option></select>
+    </div>
+    <div class="card" id="tr-list"></div>`;
+  filterTraining();
+}
+function filterTraining(){
+  const q=(val('tr-search')||'').toLowerCase(), cat=val('tr-cat'), st=val('tr-status');
+  const list = (window._trainingAll||[]).filter(r =>
+    (!cat || r.category===cat) && (!st || trainingStatus(r).key===st) &&
+    (!q || `${empName(r.employee_id)} ${r.title} ${r.provider||''}`.toLowerCase().includes(q))
+  ).sort(sortTraining);
+  document.getElementById('tr-list').innerHTML = trainingTable(list, true, 'No training records match.');
+}
+async function renderMyTraining(c){
+  const id = state.user.employee_id;
+  if (!id){ c.innerHTML='<div class="empty">No employee record linked to your account.</div>'; return; }
+  const list = (await idbByIndex('training','employee_id',id)).sort(sortTraining);
+  setTopbar(`<button class="btn btn-accent" onclick="trainingForm({employee_id:'${id}'})">+ Add training record</button>`);
+  const due = list.filter(r=>['expired','expiring'].includes(trainingStatus(r).key));
+  c.innerHTML = `
+    ${due.length?`<div class="card" style="border-left:5px solid var(--warning)"><strong>${due.length} certificate${due.length!==1?'s':''} expired or expiring soon</strong><div class="small muted">${due.map(r=>esc(r.title)+' — '+fmtDate(r.expiry_date)).join(' · ')}</div></div>`:''}
+    <div class="card"><div class="card-head"><h3>My training records</h3></div>
+      <p class="small muted" style="margin-bottom:10px">Records added by HR or your manager, plus any you add yourself (e.g. external courses or CPD). Attach the certificate where you have one.</p>
+      ${trainingTable(list, false, 'No training records yet.')}
+    </div>`;
+}
+async function empTabTraining(body, id){
+  const list = (await idbByIndex('training','employee_id',id)).sort(sortTraining);
+  const canAdd = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id));
+  body.innerHTML = `<div class="card"><div class="card-head"><h3>Training records</h3>${canAdd?`<button class="btn btn-accent btn-sm" onclick="trainingForm({employee_id:'${id}'})">+ Add training record</button>`:''}</div>
+    ${trainingTable(list, false, 'No training records.')}</div>`;
+}
+// opts: { id } to edit, or { employee_id } to add for a fixed person, or {} to pick.
+async function trainingForm(opts){
+  const existing = opts.id ? await idbGet('training', opts.id) : null;
+  if (existing && !canEditTraining(existing)){ toast("You can't edit this record",'error'); return; }
+  const r = existing || { employee_id: opts.employee_id||'', category:'Health & Safety', completed_date: today() };
+  let empPicker = '';
+  if (!existing && !opts.employee_id){
+    let emps = state.employees.filter(e=>e.status!=='leaver');
+    if (state.user.role==='manager'){ const team=teamMemberIds(); emps = emps.filter(e=>team.includes(e.id)); }
+    empPicker = `<div class="form-group"><label class="req">Employee</label><select id="trf-emp" required><option value="">Select…</option>${emps.sort((a,b)=>a.last_name.localeCompare(b.last_name)).map(e=>`<option value="${e.id}">${esc(e.first_name+' '+e.last_name)}</option>`).join('')}</select></div>`;
+  }
+  openModal(`<h2>${existing?'Edit':'Add'} training record</h2>${r.employee_id?`<div class="modal-sub">${esc(empName(r.employee_id))}</div>`:''}
+    <form onsubmit="saveTraining(event,'${existing?existing.id:''}','${r.employee_id||''}')">
+      ${empPicker}
+      <div class="form-group"><label class="req">Course / qualification</label><input id="trf-title" value="${esc(r.title||'')}" required placeholder="e.g. Emergency First Aid at Work"></div>
+      <div class="form-row">
+        <div class="form-group"><label>Category</label><select id="trf-cat">${optionList(TRAINING_CATEGORIES, r.category)}</select></div>
+        <div class="form-group"><label>Provider</label><input id="trf-provider" value="${esc(r.provider||'')}"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="req">Date completed</label><input id="trf-done" type="date" value="${esc(r.completed_date||'')}" required></div>
+        <div class="form-group"><label>Expiry / renewal date</label><input id="trf-exp" type="date" value="${esc(r.expiry_date||'')}"><div class="small muted">Leave blank if it doesn't expire.</div></div>
+      </div>
+      <div class="form-group"><label>Notes</label><input id="trf-notes" value="${esc(r.notes||'')}"></div>
+      <div class="form-group"><label>Certificate / record (optional)</label><input id="trf-file" type="file" accept=".pdf,image/*,.doc,.docx">${existing&&existing.file?`<div class="small muted">Current: ${esc(existing.file.filename)} — choose a file to replace it.</div>`:''}</div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
+    </form>`);
+}
+async function saveTraining(ev, id, presetEmp){
+  ev.preventDefault();
+  const existing = id ? await idbGet('training', id) : null;
+  const empId = existing ? existing.employee_id : (presetEmp || val('trf-emp'));
+  if (!empId){ toast('Select an employee','error'); return; }
+  if (!canViewTrainingFor(empId)){ toast('Not permitted','error'); return; }
+  const done = val('trf-done'), exp = val('trf-exp');
+  if (exp && done && exp < done){ toast('Expiry date is before the completion date','error'); return; }
+  let file = existing?.file || null;
+  const f = document.getElementById('trf-file').files[0];
+  if (f){
+    if (f.size > MAX_UPLOAD_BYTES){ toast('File is too large (max 15 MB)','error'); return; }
+    file = { filename:f.name, mime_type:f.type, data: await fileToDataURL(f) };
+  }
+  await idbPut('training', { id: id||uuid(), employee_id: empId, title: val('trf-title'), category: val('trf-cat'), provider: val('trf-provider'), completed_date: done, expiry_date: exp||null, notes: val('trf-notes'), file, added_by: existing?.added_by || state.user.username, created_at: existing?.created_at || nowISO(), updated_at: nowISO() });
+  await logAction(id?'training_update':'training_create', { employee_id: empId });
+  closeModal(); toast('Training record saved');
+  if (window._detailEmp && refreshEmpTab()) return;
+  navigate(state.page);
+}
+async function deleteTraining(id){
+  const r = await idbGet('training', id);
+  if (!r || !canEditTraining(r)) return;
+  if (!confirm(`Delete the training record "${r.title}"?`)) return;
+  await idbDelete('training', id);
+  await logAction('training_delete', { employee_id: r.employee_id });
+  toast('Deleted');
+  if (window._detailEmp && refreshEmpTab()) return;
+  navigate(state.page);
+}
+async function openTrainingCert(id){
+  const r = await idbGet('training', id);
+  if (!r || !canViewTrainingFor(r.employee_id)){ toast('Not permitted','error'); return; }
+  openStoredFile(r.file, false);
+}
+function exportTraining(){
+  const rows = [['Employee','Employee no.','Course','Category','Provider','Completed','Expires','Status']];
+  (window._trainingAll||[]).slice().sort(sortTraining).forEach(r=>{ const e=empById(r.employee_id); rows.push([empName(r.employee_id), e?.employee_number||'', r.title, r.category, r.provider||'', r.completed_date||'', r.expiry_date||'', trainingStatus(r).label]); });
+  downloadCSV('komfort-training.csv', rows);
+}
+
+// ═══════════════════════════════════════════════
+// PAYSLIPS, P60s & P11Ds (uploaded documents)
+// HR admin uploads; the employee sees their own under "My Payslips".
+// Managers never see another person's pay documents.
+// ═══════════════════════════════════════════════
+const PAY_DOC_TYPES = { payslip:'Payslip', p60:'P60', p11d:'P11D', other:'Other' };
+const PAY_DOC_PLURAL = { payslip:'Payslips', p60:'P60s', p11d:'P11Ds', other:'Other pay documents' };
+const isMonthlyPayDoc = t => t==='payslip' || t==='other';   // P60/P11D are per tax year
+function payDocPeriodLabel(d){ return isMonthlyPayDoc(d.doc_type) ? monthLabel(d.period) : ('Tax year '+(d.tax_year||'—')); }
+// Same employee + type + month/tax year → a re-upload replaces it ('other' never replaces).
+function samePaySlot(a,b){ return a.doc_type!=='other' && a.employee_id===b.employee_id && a.doc_type===b.doc_type && (a.period||null)===(b.period||null) && (a.tax_year||null)===(b.tax_year||null); }
+function payDocTypeFields(prefix){
+  const ty = recentTaxYearLabels();
+  return `<div class="form-row-3">
+    <div class="form-group"><label>Document type</label><select id="${prefix}-type" onchange="payDocTypeChanged('${prefix}')">${Object.entries(PAY_DOC_TYPES).map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select></div>
+    <div class="form-group" id="${prefix}-period-wrap"><label>Pay month</label><input id="${prefix}-period" type="month" value="${today().slice(0,7)}" placeholder="YYYY-MM" onchange="payDocTypeChanged('${prefix}')"></div>
+    <div class="form-group" id="${prefix}-ty-wrap" style="display:none"><label>Tax year</label><select id="${prefix}-ty" onchange="payDocTypeChanged('${prefix}')">${ty.map((y,i)=>`<option ${i===1?'selected':''}>${y}</option>`).join('')}</select></div>
+  </div>`;
+}
+function payDocTypeChanged(prefix){
+  const monthly = isMonthlyPayDoc(val(prefix+'-type'));
+  document.getElementById(prefix+'-period-wrap').style.display = monthly ? '' : 'none';
+  document.getElementById(prefix+'-ty-wrap').style.display = monthly ? 'none' : '';
+  if (prefix==='bu') renderBulkMap();
+}
+// Validates the slot inputs; returns { type, period, tax_year } or null.
+function readPaySlot(prefix){
+  const type = val(prefix+'-type');
+  if (isMonthlyPayDoc(type)){
+    const period = val(prefix+'-period');
+    if (!/^\d{4}-\d{2}$/.test(period)){ toast('Enter the pay month as YYYY-MM','error'); return null; }
+    return { type, period, tax_year:null };
+  }
+  return { type, period:null, tax_year: val(prefix+'-ty') };
+}
+async function makePayDoc(empId, file, slot){
+  return { id:uuid(), employee_id:empId, doc_type:slot.type, period:slot.period, tax_year:slot.tax_year, filename:file.name, mime_type:file.type, data: await fileToDataURL(file), uploaded_by: state.user.username, uploaded_at: nowISO(), viewed_at:null };
+}
+function payDocRow(d, admin){
+  const isNew = !admin && !d.viewed_at;
+  return `<div class="doc-row"><div class="dic">${docIcon(d.mime_type)}</div><div class="di"><div class="t">${esc(payDocPeriodLabel(d))} <span class="badge b-grey">${PAY_DOC_TYPES[d.doc_type]||esc(d.doc_type)}</span>${isNew?' <span class="badge b-yellow">New</span>':''}</div><div class="small muted">${esc(d.filename)} · uploaded ${fmtDate(d.uploaded_at)}${admin?(d.viewed_at?' · opened by employee '+fmtDate(d.viewed_at):' · not yet opened by employee'):''}</div></div>
+    <button class="btn btn-outline btn-sm" onclick="openPayDoc('${d.id}',false)">View</button> <button class="btn btn-outline btn-sm" onclick="openPayDoc('${d.id}',true)">Download</button>${admin?` <button class="btn btn-danger btn-sm" onclick="deletePayDoc('${d.id}')">×</button>`:''}</div>`;
+}
+function payDocGroups(docs, admin){
+  if (!docs.length) return '<div class="empty small">No documents uploaded yet.</div>';
+  return ['payslip','p60','p11d','other'].map(t => {
+    const list = docs.filter(d=>d.doc_type===t).sort((a,b)=> isMonthlyPayDoc(t) ? (b.period||'').localeCompare(a.period||'') : (b.tax_year||'').localeCompare(a.tax_year||''));
+    return list.length ? `<h4 style="margin:14px 0 8px">${PAY_DOC_PLURAL[t]}</h4>${list.map(d=>payDocRow(d,admin)).join('')}` : '';
+  }).join('');
+}
+// Employee view (employee logins only)
+async function renderMyPayslips(c){
+  const id = state.user.employee_id;
+  if (state.user.role!=='employee' || !id){ c.innerHTML='<div class="empty">Not available.</div>'; return; }
+  const docs = await idbByIndex('pay_documents','employee_id',id);
+  const latest = docs.filter(d=>d.doc_type==='payslip').sort((a,b)=>(b.period||'').localeCompare(a.period||''))[0];
+  c.innerHTML = `
+    ${latest?`<div class="card" style="border-left:5px solid var(--accent)"><div class="card-head" style="margin-bottom:0"><div><div class="small muted">Latest payslip</div><h3 style="margin:2px 0 0">${esc(monthLabel(latest.period))}${!latest.viewed_at?' <span class="badge b-yellow">New</span>':''}</h3></div><div><button class="btn btn-primary btn-sm" onclick="openPayDoc('${latest.id}',false)">View</button> <button class="btn btn-outline btn-sm" onclick="openPayDoc('${latest.id}',true)">Download</button></div></div></div>`:''}
+    <div class="card"><div class="card-head"><h3>My payslips & tax documents</h3></div>
+      <p class="small muted" style="margin-bottom:6px">Uploaded by HR. Only you and HR can see these.</p>
+      ${payDocGroups(docs, false)}
+    </div>`;
+}
+// Employee record → Payslips tab (HR admin only)
+async function empTabPayDocs(body, id){
+  if (state.user.role!=='hr_admin'){ body.innerHTML='<div class="empty">Not available.</div>'; return; }
+  const docs = await idbByIndex('pay_documents','employee_id',id);
+  body.innerHTML = `<div class="card"><div class="card-head"><h3>Payslips, P60s & P11Ds</h3><button class="btn btn-accent btn-sm" onclick="payDocForm('${id}')">+ Upload</button></div>
+    <p class="small muted" style="margin-bottom:6px">Confidential — visible only to HR admin and to the employee under <em>My Payslips</em>. Managers can't see these.</p>
+    ${payDocGroups(docs, true)}</div>`;
+}
+function payDocForm(empId){
+  openModal(`<h2>Upload pay document</h2><div class="modal-sub">${esc(empName(empId))}</div>
+    <form onsubmit="savePayDoc(event,'${empId}')">
+      ${payDocTypeFields('pdf')}
+      <div class="form-group"><label class="req">File</label><input id="pdf-file" type="file" accept=".pdf,image/*" required></div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Upload</button></div>
+    </form>`);
+}
+async function savePayDoc(ev, empId){
+  ev.preventDefault();
+  if (state.user.role!=='hr_admin') return;
+  const f = document.getElementById('pdf-file').files[0]; if (!f) return;
+  if (f.size > MAX_UPLOAD_BYTES){ toast('File is too large (max 15 MB)','error'); return; }
+  const slot = readPaySlot('pdf'); if (!slot) return;
+  const rec = await makePayDoc(empId, f, slot);
+  const clash = (await idbByIndex('pay_documents','employee_id',empId)).filter(d=>samePaySlot(d,rec));
+  if (clash.length && !confirm(`A ${PAY_DOC_TYPES[slot.type]} for ${payDocPeriodLabel(rec)} already exists. Replace it?`)) return;
+  for (const d of clash) await idbDelete('pay_documents', d.id);
+  await idbPut('pay_documents', rec);
+  await logAction('pay_document_upload', { employee_id: empId });
+  closeModal(); toast('Uploaded');
+  if (window._detailEmp && refreshEmpTab()) return;
+  navigate(state.page);
+}
+async function openPayDoc(id, download){
+  const d = await idbGet('pay_documents', id);
+  if (!d) return;
+  const own = state.user.role==='employee' && d.employee_id===state.user.employee_id;
+  if (state.user.role!=='hr_admin' && !own){ toast('Not permitted','error'); return; }
+  openStoredFile(d, download);
+  await logAction('pay_document_open', { employee_id: d.employee_id });
+  if (own && !d.viewed_at){ d.viewed_at = nowISO(); await idbPut('pay_documents', d); if (state.page==='my-payslips') navigate('my-payslips'); }
+}
+async function deletePayDoc(id){
+  if (state.user.role!=='hr_admin') return;
+  const d = await idbGet('pay_documents', id); if (!d) return;
+  if (!confirm(`Delete ${PAY_DOC_TYPES[d.doc_type]} (${payDocPeriodLabel(d)}) for ${empName(d.employee_id)}?`)) return;
+  await idbDelete('pay_documents', id);
+  await logAction('pay_document_delete', { employee_id: d.employee_id });
+  toast('Deleted');
+  if (window._detailEmp && refreshEmpTab()) return;
+  navigate(state.page);
+}
+// HR admin → Payslip Uploads (bulk upload + register)
+async function renderPayslipUploads(c){
+  if (state.user.role!=='hr_admin'){ c.innerHTML='<div class="empty">Not available.</div>'; return; }
+  const all = await idbGetAll('pay_documents');
+  window._payDocsAll = all; window._bulkPay = [];
+  const month = today().slice(0,7);
+  const current = state.employees.filter(e=>e.status!=='leaver');
+  const withSlip = new Set(all.filter(d=>d.doc_type==='payslip' && d.period===month).map(d=>d.employee_id));
+  c.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat"><div class="num">${all.length}</div><div class="lbl">Documents uploaded</div></div>
+      <div class="stat ${current.some(e=>!withSlip.has(e.id))?'warn':'ok'} clickable" onclick="showMissingPayslips()"><div class="num">${current.filter(e=>withSlip.has(e.id)).length} / ${current.length}</div><div class="lbl">Payslips for ${monthLabel(month)}</div></div>
+      <div class="stat info"><div class="num">${all.filter(d=>!d.viewed_at).length}</div><div class="lbl">Not yet opened by employee</div></div>
+    </div>
+    <div class="card"><div class="card-head"><h3>Bulk upload</h3></div>
+      <p class="small muted" style="margin-bottom:12px">Pick the document type and month (or tax year), then select all the files at once. Each file is matched to an employee by <strong>employee number</strong> (e.g. KP-014) or <strong>name</strong> in the file name — check the matches before uploading. Uploading again for the same month / tax year replaces the earlier file.</p>
+      ${payDocTypeFields('bu')}
+      <div class="form-group"><label>Files</label><input id="bu-files" type="file" multiple accept=".pdf,image/*" onchange="bulkFilesChosen()"></div>
+      <div id="bu-map"></div>
+    </div>
+    <div class="card"><div class="card-head"><h3>Uploaded documents</h3></div>
+      <div class="toolbar">
+        <input class="grow" id="pu-search" placeholder="Search employee, month or file…" oninput="filterPayDocs()">
+        <select id="pu-type" onchange="filterPayDocs()"><option value="">All types</option>${Object.entries(PAY_DOC_TYPES).map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select>
+      </div>
+      <div id="pu-list"></div>
+    </div>`;
+  filterPayDocs();
+}
+function filterPayDocs(){
+  const q=(val('pu-search')||'').toLowerCase(), t=val('pu-type');
+  const list=(window._payDocsAll||[]).filter(d => (!t || d.doc_type===t) && (!q || `${empName(d.employee_id)} ${d.filename} ${payDocPeriodLabel(d)}`.toLowerCase().includes(q)))
+    .sort((a,b)=>(b.uploaded_at||'').localeCompare(a.uploaded_at||''));
+  document.getElementById('pu-list').innerHTML = list.length ? `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Type</th><th>Period</th><th>File</th><th>Uploaded</th><th>Opened</th><th></th></tr></thead><tbody>${
+    list.map(d=>`<tr><td>${esc(empName(d.employee_id))}</td><td><span class="badge b-grey">${PAY_DOC_TYPES[d.doc_type]||esc(d.doc_type)}</span></td><td>${esc(payDocPeriodLabel(d))}</td><td class="small" style="overflow-wrap:anywhere">${esc(d.filename)}</td><td class="small">${fmtDate(d.uploaded_at)}</td><td class="small">${d.viewed_at?fmtDate(d.viewed_at):'—'}</td><td style="text-align:right;white-space:nowrap"><button class="btn btn-outline btn-sm" onclick="openPayDoc('${d.id}',false)">View</button> <button class="btn btn-danger btn-sm" onclick="deletePayDoc('${d.id}')">×</button></td></tr>`).join('')
+  }</tbody></table></div>` : '<div class="empty small">No documents uploaded yet.</div>';
+}
+function showMissingPayslips(){
+  const month = today().slice(0,7);
+  const have = new Set((window._payDocsAll||[]).filter(d=>d.doc_type==='payslip' && d.period===month).map(d=>d.employee_id));
+  const missing = state.employees.filter(e=>e.status!=='leaver' && !have.has(e.id)).sort((a,b)=>a.last_name.localeCompare(b.last_name));
+  openModal(`<h2>No payslip yet for ${monthLabel(month)} (${missing.length})</h2>
+    ${missing.length?`<div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Employee</th><th>No.</th><th>Site</th><th></th></tr></thead><tbody>${missing.map(e=>`<tr><td>${esc(e.first_name+' '+e.last_name)}</td><td>${esc(e.employee_number||'—')}</td><td>${esc(e.site||'')}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="payDocForm('${e.id}')">Upload</button></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty small">Everyone has a payslip for this month.</div>'}
+    <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Close</button></div>`, true);
+}
+// Match a file name to an employee: employee number first, then full name, then a unique surname.
+function matchEmployeeForFile(name){
+  const norm = s => (s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  const n = norm(name.replace(/\.[^.]+$/,''));
+  const emps = state.employees.slice().sort((a,b)=>(b.employee_number||'').length-(a.employee_number||'').length);
+  let hit = emps.find(e => e.employee_number && norm(e.employee_number).length>2 && n.includes(norm(e.employee_number)));
+  if (!hit) hit = emps.find(e => n.includes(norm(e.first_name+e.last_name)) || n.includes(norm(e.last_name+e.first_name)));
+  if (!hit){ const bySurname = emps.filter(e => (e.last_name||'').length>2 && n.includes(norm(e.last_name))); if (bySurname.length===1) hit = bySurname[0]; }
+  return hit ? hit.id : '';
+}
+function bulkFilesChosen(){
+  window._bulkPay = [...document.getElementById('bu-files').files].map(f => ({ file:f, empId: matchEmployeeForFile(f.name) }));
+  renderBulkMap();
+}
+async function renderBulkMap(){
+  const wrap = document.getElementById('bu-map'); if (!wrap) return;
+  const rows = window._bulkPay || [];
+  if (!rows.length){ wrap.innerHTML=''; return; }
+  const type = val('bu-type');
+  const slot = { doc_type:type, period: isMonthlyPayDoc(type)?val('bu-period'):null, tax_year: isMonthlyPayDoc(type)?null:val('bu-ty') };
+  const existing = await idbGetAll('pay_documents');
+  const emps = state.employees.slice().sort((a,b)=>a.last_name.localeCompare(b.last_name));
+  const counts = {}; rows.forEach(r=>{ if (r.empId) counts[r.empId]=(counts[r.empId]||0)+1; });
+  const matched = rows.filter(r=>r.empId).length;
+  const dupes = Object.values(counts).some(n=>n>1);
+  wrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th>File</th><th>Employee</th><th>Status</th></tr></thead><tbody>${rows.map((r,i)=>{
+      const big = r.file.size > MAX_UPLOAD_BYTES;
+      const replaces = r.empId && existing.some(d=>samePaySlot(d, { ...slot, employee_id:r.empId }));
+      const status = big ? '<span class="badge b-red">Too large</span>' : !r.empId ? '<span class="badge b-grey">Not matched — skipped</span>' : counts[r.empId]>1 ? '<span class="badge b-red">Duplicate employee</span>' : replaces ? '<span class="badge b-amber">Replaces existing</span>' : '<span class="badge b-green">Ready</span>';
+      return `<tr><td class="small" style="overflow-wrap:anywhere">${esc(r.file.name)}</td><td><select style="padding:6px;border:2px solid var(--border);border-radius:6px;max-width:260px" onchange="window._bulkPay[${i}].empId=this.value;renderBulkMap()"><option value="">— skip —</option>${emps.map(e=>`<option value="${e.id}" ${r.empId===e.id?'selected':''}>${esc(e.last_name+', '+e.first_name)}${e.employee_number?' ('+esc(e.employee_number)+')':''}</option>`).join('')}</select></td><td>${status}</td></tr>`; }).join('')}</tbody></table></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;gap:10px;flex-wrap:wrap"><span class="small muted">${matched} of ${rows.length} file${rows.length!==1?'s':''} matched${dupes?' · <span style="color:var(--danger)">two files point at the same employee</span>':''}</span><button class="btn btn-primary" onclick="saveBulkPayDocs()" ${matched&&!dupes?'':'disabled'}>Upload ${matched} document${matched!==1?'s':''}</button></div>`;
+}
+async function saveBulkPayDocs(){
+  if (state.user.role!=='hr_admin') return;
+  const rows = (window._bulkPay||[]).filter(r=>r.empId);
+  if (new Set(rows.map(r=>r.empId)).size !== rows.length){ toast('Two files are matched to the same employee — fix or skip one','error'); return; }
+  const tooBig = rows.find(r=>r.file.size > MAX_UPLOAD_BYTES);
+  if (tooBig){ toast(`${tooBig.file.name} is too large (max 15 MB) — skip it`,'error'); return; }
+  const slot = readPaySlot('bu'); if (!slot) return;
+  const existing = await idbGetAll('pay_documents');
+  for (const r of rows){
+    const rec = await makePayDoc(r.empId, r.file, slot);
+    for (const d of existing.filter(d=>samePaySlot(d,rec))) await idbDelete('pay_documents', d.id);
+    await idbPut('pay_documents', rec);
+  }
+  await logAction('pay_documents_bulk_upload', { detail: `${rows.length} × ${PAY_DOC_TYPES[slot.type]}` });
+  window._bulkPay = [];
+  toast(`Uploaded ${rows.length} document${rows.length!==1?'s':''}`);
+  navigate('payslip-uploads');
+}
+
+// ═══════════════════════════════════════════════
+// ORGANISATION CHART (visible to everyone)
+// ═══════════════════════════════════════════════
+async function renderOrgChart(c){
+  const people = state.employees.filter(e => e.status !== 'leaver');
+  const ids = new Set(people.map(e=>e.id));
+  const kids = {};
+  people.forEach(e => { const m = (e.manager_id && ids.has(e.manager_id) && e.manager_id!==e.id) ? e.manager_id : '_root'; (kids[m] = kids[m]||[]).push(e); });
+  Object.values(kids).forEach(l => l.sort((a,b)=>(a.last_name||'').localeCompare(b.last_name||'')));
+  const seen = new Set();   // guards against circular manager links
+  const node = e => {
+    if (seen.has(e.id)) return '';
+    seen.add(e.id);
+    const reports = (kids[e.id]||[]).filter(r=>!seen.has(r.id));
+    return `<li>${orgNodeHtml(e, (kids[e.id]||[]).length)}${reports.length?`<ul>${reports.map(node).join('')}</ul>`:''}</li>`;
+  };
+  let tree = (kids['_root']||[]).map(node).join('');
+  people.filter(e=>!seen.has(e.id)).forEach(e => { tree += node(e); });
+  c.innerHTML = `
+    <div class="toolbar">
+      <div class="pill-tabs" id="org-view" style="margin:0"><div class="pill active" onclick="orgView('chart',this)">Chart</div><div class="pill" onclick="orgView('dept',this)">By department</div></div>
+      <input class="grow" id="org-search" placeholder="Find a person, job title or department…" oninput="orgSearch()">
+      <select id="org-site" onchange="orgSearch()"><option value="">All sites</option>${SITES.map(s=>`<option>${esc(s)}</option>`).join('')}</select>
+    </div>
+    <div class="card" id="org-chart-card">
+      ${people.length?`<div class="org-wrap"><div class="org-tree"><ul>${tree}</ul></div></div>`:'<div class="empty">No employees yet.</div>'}
+      <div class="small muted" style="margin-top:8px">${people.length} people · reporting lines come from each employee's <em>Manager</em> field · click anyone for contact details</div>
+    </div>
+    <div id="org-dept-card" style="display:none">${orgDeptHtml(people)}</div>`;
+}
+function orgSearchText(e){ return esc(`${e.first_name} ${e.last_name} ${e.job_title||''} ${e.department||''}`.toLowerCase()); }
+function orgNodeHtml(e, nReports){
+  const me = e.id===state.user.employee_id;
+  return `<div class="org-node${me?' me':''}" data-search="${orgSearchText(e)}" data-site="${esc(e.site||'')}" onclick="orgContact('${e.id}')">
+    ${avatarHtml(e)}
+    <div class="org-name">${esc(e.first_name)} ${esc(e.last_name)}${me?' <span class="badge b-yellow">You</span>':''}</div>
+    <div class="org-title">${esc(e.job_title||'')}</div>
+    <div class="org-meta">${esc(e.department||'')}${e.site?' · '+esc(e.site):''}</div>
+    ${nReports?`<div class="org-meta">${nReports} direct report${nReports!==1?'s':''}</div>`:''}
+  </div>`;
+}
+function orgDeptHtml(people){
+  const depts = [...new Set(people.map(e=>e.department||'Other'))].sort();
+  return depts.map(d => {
+    const list = people.filter(e=>(e.department||'Other')===d).sort((a,b)=>(a.last_name||'').localeCompare(b.last_name||''));
+    return `<div class="card org-dept"><div class="card-head"><h3>${esc(d)}</h3><span class="small muted">${list.length}</span></div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Job title</th><th>Site</th><th>Reports to</th><th>Work email</th></tr></thead><tbody>${
+      list.map(e=>`<tr class="clickable org-row" data-search="${orgSearchText(e)}" data-site="${esc(e.site||'')}" onclick="orgContact('${e.id}')"><td><strong>${esc(e.first_name+' '+e.last_name)}</strong></td><td>${esc(e.job_title||'')}</td><td>${esc(e.site||'')}</td><td>${e.manager_id?esc(empName(e.manager_id)):'—'}</td><td class="small">${e.work_email?`<a href="mailto:${esc(e.work_email)}" onclick="event.stopPropagation()">${esc(e.work_email)}</a>`:'—'}</td></tr>`).join('')
+    }</tbody></table></div></div>`;
+  }).join('');
+}
+function orgView(v, el){
+  document.querySelectorAll('#org-view .pill').forEach(p=>p.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('org-chart-card').style.display = v==='chart' ? '' : 'none';
+  document.getElementById('org-dept-card').style.display = v==='dept' ? '' : 'none';
+}
+function orgSearch(){
+  const q = (val('org-search')||'').toLowerCase(), site = val('org-site');
+  const match = el => (!q || el.dataset.search.includes(q)) && (!site || el.dataset.site===site);
+  document.querySelectorAll('.org-node').forEach(n => { const hit = match(n); n.classList.toggle('dim', !hit); n.classList.toggle('hit', !!q && hit); });
+  document.querySelectorAll('.org-row').forEach(r => { r.style.display = match(r) ? '' : 'none'; });
+  document.querySelectorAll('.org-dept').forEach(d => { d.style.display = [...d.querySelectorAll('.org-row')].some(r=>r.style.display!=='none') ? '' : 'none'; });
+  if (q){ const first = document.querySelector('.org-node.hit'); if (first) first.scrollIntoView({ block:'nearest', inline:'center' }); }
+}
+// Contact card — work details only, so it's safe for everyone to see.
+function orgContact(id){
+  const e = empById(id); if (!e) return;
+  const role = state.user.role;
+  const canOpen = role==='hr_admin' || (role==='manager' && teamMemberIds().includes(id));
+  const reports = state.employees.filter(x=>x.manager_id===id && x.status!=='leaver').sort((a,b)=>(a.last_name||'').localeCompare(b.last_name||''));
+  const link = (pid, label) => `<a href="#" onclick="event.preventDefault();orgContact('${pid}')">${esc(label)}</a>`;
+  openModal(`<div class="detail-head">${avatarHtml(e,true)}<div class="who"><h2 style="margin:0">${esc(e.first_name+' '+e.last_name)}</h2><div class="muted">${esc(e.job_title||'')}</div><div class="small muted">${esc(e.department||'')}${e.site?' · '+esc(e.site):''}</div></div></div>
+    <dl class="kv" style="margin-top:16px">
+      <dt>Reports to</dt><dd>${e.manager_id && empById(e.manager_id) ? link(e.manager_id, empName(e.manager_id)) : '—'}</dd>
+      <dt>Direct reports</dt><dd>${reports.length ? reports.map(r=>link(r.id, r.first_name+' '+r.last_name)).join(', ') : '—'}</dd>
+      <dt>Work email</dt><dd>${e.work_email?`<a href="mailto:${esc(e.work_email)}">${esc(e.work_email)}</a>`:'—'}</dd>
+    </dl>
+    <div class="modal-actions">${canOpen?`<button class="btn btn-primary" onclick="closeModal();employeeDetail('${id}')">Open employee record</button>`:''}<button class="btn btn-outline" onclick="closeModal()">Close</button></div>`);
+}
 
 // ═══════════════════════════════════════════════
 // REPORTS

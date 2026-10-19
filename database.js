@@ -200,6 +200,39 @@ function initializeSchema() {
       details TEXT
     )
   `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS training (
+      id TEXT PRIMARY KEY,
+      employee_id TEXT NOT NULL REFERENCES employees(id),
+      title TEXT NOT NULL,
+      category TEXT,
+      provider TEXT,
+      completed_date TEXT,
+      expiry_date TEXT,
+      notes TEXT,
+      file_name TEXT,
+      file_path TEXT,
+      added_by TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
+    )
+  `);
+  // Uploaded payslips / P60s / P11Ds — confidential: HR admin + the employee only.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS pay_documents (
+      id TEXT PRIMARY KEY,
+      employee_id TEXT NOT NULL REFERENCES employees(id),
+      doc_type TEXT NOT NULL CHECK(doc_type IN ('payslip','p60','p11d','other')),
+      period TEXT,
+      tax_year TEXT,
+      file_name TEXT,
+      mime_type TEXT,
+      file_path TEXT,
+      uploaded_by TEXT,
+      uploaded_at TEXT DEFAULT (datetime('now')),
+      viewed_at TEXT
+    )
+  `);
 
   // Indexes
   db.run('CREATE INDEX IF NOT EXISTS idx_emp_manager ON employees(manager_id)');
@@ -210,6 +243,8 @@ function initializeSchema() {
   db.run('CREATE INDEX IF NOT EXISTS idx_objectives_emp ON objectives(employee_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_docs_emp ON documents(employee_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_to)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_training_emp ON training(employee_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_paydocs_emp ON pay_documents(employee_id)');
 
   // Default settings
   db.run("INSERT OR IGNORE INTO settings (key, value) VALUES ('holiday_year_start', '01-01')");
