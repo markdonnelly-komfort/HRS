@@ -616,7 +616,7 @@ async function computeBadges(){
     newPayDocs = (await idbByIndex('pay_documents','employee_id',state.user.employee_id)).filter(d=>!d.viewed_at).length;
   }
   return {
-    pendingHoliday: pending.filter(l=>l.type==='holiday').length,
+    pendingHoliday: pending.filter(l=>l.type==='holiday').length + (state.user.role==='employee' ? 0 : leave.filter(l=>isCancelRequest(l) && canDecideCancel(l)).length),
     pendingSickness: pending.filter(l=>l.type==='sickness').length,
     pendingOther: pending.filter(l=>OTHER_ABSENCE.includes(l.type)).length,
     openTasks: openTasks.length,
@@ -800,6 +800,7 @@ async function renderDashboard(c){
 
   let pending = leave.filter(l => l.status==='pending');
   if (isMgr){ const team=teamMemberIds(); pending = pending.filter(l=>team.includes(l.employee_id)); }
+  const cancelReqs = leave.filter(l => isCancelRequest(l) && canDecideCancel(l)).sort((a,b)=>a.start_date.localeCompare(b.start_date));
 
   // currently off today (exclude adjustment records — they aren't absences)
   const offToday = leave.filter(l => l.type!=='adjustment' && l.status==='approved' && l.start_date<=today() && l.end_date>=today() && (!isMgr || teamMemberIds().includes(l.employee_id)));
@@ -818,7 +819,7 @@ async function renderDashboard(c){
     <div class="stat-grid">
       <div class="stat clickable" onclick="openDashList('active')"><div class="num">${active.length}</div><div class="lbl">Active employees</div></div>
       <div class="stat info clickable" onclick="openDashList('offtoday')"><div class="num">${offToday.length}</div><div class="lbl">Off today</div></div>
-      <div class="stat warn clickable" onclick="openDashList('pending')"><div class="num">${pending.length}</div><div class="lbl">Leave to approve</div></div>
+      <div class="stat warn clickable" onclick="openDashList('pending')"><div class="num">${pending.length + cancelReqs.length}</div><div class="lbl">Leave to approve${cancelReqs.length?` (incl. ${cancelReqs.length} cancellation${cancelReqs.length!==1?'s':''})`:''}</div></div>
       <div class="stat ${sickDays>0?'warn':'ok'} clickable" onclick="openDashList('sick')"><div class="num">${sickDays}</div><div class="lbl">Sick days (${bounds.label})</div></div>
       <div class="stat ${probDue.length?'warn':''} clickable" onclick="openDashList('probation')"><div class="num">${probDue.length}</div><div class="lbl">Probation reviews due</div></div>
       <div class="stat ${trainingDue.length?'warn':'ok'} clickable" onclick="openDashList('training')"><div class="num">${trainingDue.length}</div><div class="lbl">Training expiring / expired</div></div>
@@ -838,6 +839,13 @@ async function renderDashboard(c){
         pending.slice(0,6).map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)} – ${fmtDate(l.end_date)}</td><td>${l.days}</td><td style="text-align:right"><button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')">Approve</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button></td></tr>`).join('')
       }</tbody></table></div>` : `<div class="empty"><span class="ic">✓</span>No leave waiting for approval.</div>`}
     </div>
+
+    ${cancelReqs.length?`<div class="card">
+      <div class="card-head"><h3>Holiday cancellation requests</h3><button class="btn btn-primary btn-sm" onclick="navigate('leave-holiday')">Review all</button></div>
+      <div class="table-wrap"><table><thead><tr><th>Employee</th><th>Holiday</th><th>Days</th><th>Reason</th><th></th></tr></thead><tbody>${
+        cancelReqs.slice(0,6).map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${fmtDate(l.start_date)} – ${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.cancel_reason)||'—'}</td><td style="text-align:right;white-space:nowrap">${cancelDecisionButtons(l)}</td></tr>`).join('')
+      }</tbody></table></div>
+    </div>`:''}
 
     <div class="form-row">
       <div class="card">
@@ -875,6 +883,12 @@ async function openDashList(kind){
     title = `Leave to approve (${list.length})`;
     html = tableWrap('<th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Days</th><th></th>',
       list.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td><span class="badge ${LEAVE_TYPES[l.type].colour}">${LEAVE_TYPES[l.type].label}</span></td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td style="text-align:right;white-space:nowrap"><button class="btn btn-success btn-sm" onclick="closeModal();decideLeave('${l.id}','approved')">Approve</button> <button class="btn btn-danger btn-sm" onclick="closeModal();decideLeave('${l.id}','rejected')">Reject</button></td></tr>`).join(''), 'Nothing awaiting approval.');
+    const cancels = (await idbGetAll('leave')).filter(l=>isCancelRequest(l) && canDecideCancel(l)).sort((a,b)=>a.start_date.localeCompare(b.start_date));
+    if (cancels.length){
+      title = `Leave to approve (${list.length + cancels.length})`;
+      html += `<h4 style="margin:18px 0 8px">Holiday cancellation requests</h4>` + tableWrap('<th>Employee</th><th>Holiday</th><th>Days</th><th>Reason</th><th></th>',
+        cancels.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${fmtDate(l.start_date)} – ${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.cancel_reason)||'—'}</td><td style="text-align:right;white-space:nowrap"><button class="btn btn-success btn-sm" onclick="closeModal();decideCancellation('${l.id}',true)">Approve cancellation</button> <button class="btn btn-danger btn-sm" onclick="closeModal();decideCancellation('${l.id}',false)">Decline</button></td></tr>`).join(''), '');
+    }
   } else if (kind==='sick'){
     const list = (await idbGetAll('leave')).filter(l=>l.type==='sickness' && l.status==='approved' && l.start_date>=bounds.start && l.start_date<=bounds.end && inScope(l.employee_id)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
     const total = list.reduce((a,l)=>a+l.days,0);
@@ -1063,9 +1077,9 @@ async function empTabLeave(body, id){
   const holidays = all.filter(l=>l.type==='holiday');
   const adjustments = all.filter(l=>l.type==='adjustment');
   const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id));
-  const act = l => canManage ? `<td style="text-align:right;white-space:nowrap">${l.status==='pending'?`<button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')" title="Approve / book">Book</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button>`:`<button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button>`}</td>` : '';
+  const act = l => canManage ? `<td style="text-align:right;white-space:nowrap">${l.status==='pending'?`<button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')" title="Approve / book">Book</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button>`:isCancelRequest(l)?cancelDecisionButtons(l):`<button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button>`}</td>` : '';
   const leaveTable = (list,empty) => list.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
-      list.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td>${act(l)}</tr>`).join('')
+      list.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusCell(l)}</td><td class="small">${esc(l.reason)||'—'}${isCancelRequest(l)&&l.cancel_reason?`<div class="muted">Cancellation reason: ${esc(l.cancel_reason)}</div>`:''}</td>${act(l)}</tr>`).join('')
     }</tbody></table></div>`:`<div class="empty small">${empty}</div>`;
   body.innerHTML = balanceTiles(bal, id) + `
     <div class="card"><div class="card-head"><h3>Holiday bookings</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="leaveForm('${id}',false,'holiday')">+ Add holiday</button>`:''}</div>
@@ -1270,6 +1284,7 @@ async function renderLeave(c, category){
   let leave = (await idbGetAll('leave')).filter(inCat);
   if (scope) leave = leave.filter(l => scope.includes(l.employee_id));
   const pending = leave.filter(l=>l.status==='pending').sort((a,b)=>a.start_date.localeCompare(b.start_date));
+  const cancelReqs = leave.filter(l=>isCancelRequest(l) && canDecideCancel(l)).sort((a,b)=>a.start_date.localeCompare(b.start_date));
   const records = leave.filter(l=>l.status!=='pending').sort((a,b)=>b.start_date.localeCompare(a.start_date));
   const meta = {
     holiday:  { recTitle:'Holiday bookings',       recBtn:'+ Record holiday',  preset:'holiday' },
@@ -1287,10 +1302,16 @@ async function renderLeave(c, category){
         pending.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td>${typeCell(l)}<td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td><td style="text-align:right;white-space:nowrap"><button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')">Approve</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button></td></tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">Nothing awaiting approval.</div>'}
     </div>
+    ${category==='holiday'?`<div class="card">
+      <div class="card-head"><h3>Cancellation requests (${cancelReqs.length})</h3></div>
+      ${cancelReqs.length?`<p class="small muted" style="margin-bottom:10px">Approved holidays the employee has asked to cancel. They stay booked until you approve the cancellation.</p><div class="table-wrap"><table><thead><tr><th>Employee</th><th>From</th><th>To</th><th>Days</th><th>Requested</th><th>Reason</th><th></th></tr></thead><tbody>${
+        cancelReqs.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${fmtDate(l.cancel_requested_at)}</td><td class="small">${esc(l.cancel_reason)||'—'}</td><td style="text-align:right;white-space:nowrap">${cancelDecisionButtons(l)}</td></tr>`).join('')
+      }</tbody></table></div>`:'<div class="empty small">No cancellation requests.</div>'}
+    </div>`:''}
     <div class="card">
       <div class="card-head"><h3>${meta.recTitle}</h3></div>
       ${records.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th>${typeCol}<th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th></tr></thead><tbody>${
-        records.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td>${typeCell(l)}<td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td></tr>`).join('')
+        records.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td>${typeCell(l)}<td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusCell(l)}</td><td class="small">${esc(l.reason)||'—'}</td></tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">No records.</div>'}
     </div>`;
 }
@@ -1309,6 +1330,67 @@ async function decideLeave(id, decision){
   refreshLeaveViews();
 }
 async function deleteLeave(id){ if(!confirm('Delete this leave record?'))return; await idbDelete('leave',id); toast('Deleted'); refreshLeaveViews(); }
+
+// ── Cancellation of approved, not-yet-started holiday ──
+// The booking stays "approved" (and counts against the balance) until the
+// approver accepts the cancellation; then it becomes "cancelled" and the days
+// return to the employee's balance.
+const canRequestCancel = l => l.type==='holiday' && l.status==='approved' && l.start_date > today() && !l.cancel_requested;
+const isCancelRequest = l => l.type==='holiday' && l.status==='approved' && !!l.cancel_requested;
+function leaveStatusCell(l){
+  if (isCancelRequest(l)) return leaveStatusBadge(l.status)+' <span class="badge b-amber">Cancellation requested</span>';
+  if (l.status==='approved' && l.cancel_outcome==='declined') return leaveStatusBadge(l.status)+' <span class="badge b-grey">Cancellation declined</span>';
+  return leaveStatusBadge(l.status);
+}
+// Approver: HR admin, or the employee's manager — never the employee themself.
+function canDecideCancel(l){
+  if (l.employee_id===state.user.employee_id) return false;
+  return state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(l.employee_id));
+}
+function cancelDecisionButtons(l){
+  return canDecideCancel(l) ? `<button class="btn btn-success btn-sm" onclick="decideCancellation('${l.id}',true)">Approve cancellation</button> <button class="btn btn-danger btn-sm" onclick="decideCancellation('${l.id}',false)">Decline</button>` : '';
+}
+async function cancelRequestForm(id){
+  const l = await idbGet('leave', id);
+  if (!l || l.employee_id!==state.user.employee_id || !canRequestCancel(l)){ toast('This holiday can no longer be cancelled','error'); return; }
+  openModal(`<h2>Request cancellation</h2><div class="modal-sub">Holiday ${fmtDate(l.start_date)} – ${fmtDate(l.end_date)} · ${l.days} day${l.days!==1?'s':''}</div>
+    <form onsubmit="submitCancelRequest(event,'${id}')">
+      <p class="small muted" style="margin-bottom:12px">Your manager needs to approve this. The holiday stays booked until they do; once approved, the days go back into your balance.</p>
+      <div class="form-group"><label>Reason (optional)</label><textarea id="cr-reason" rows="2" placeholder="e.g. Plans changed"></textarea></div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Keep holiday</button><button type="submit" class="btn btn-primary">Send request</button></div>
+    </form>`);
+}
+async function submitCancelRequest(ev, id){
+  ev.preventDefault();
+  const l = await idbGet('leave', id);
+  if (!l || l.employee_id!==state.user.employee_id || !canRequestCancel(l)){ toast('This holiday can no longer be cancelled','error'); closeModal(); return; }
+  Object.assign(l, { cancel_requested:true, cancel_requested_at:nowISO(), cancel_reason:val('cr-reason'), cancel_outcome:null });
+  await idbPut('leave', l);
+  await logAction('holiday_cancel_requested', { employee_id:l.employee_id, leave_id:id });
+  closeModal(); toast('Cancellation request sent for approval');
+  refreshLeaveViews();
+}
+async function withdrawCancelRequest(id){
+  const l = await idbGet('leave', id);
+  if (!l || l.employee_id!==state.user.employee_id || !isCancelRequest(l)) return;
+  if (!confirm('Withdraw your cancellation request? The holiday will stay booked.')) return;
+  Object.assign(l, { cancel_requested:false, cancel_requested_at:null, cancel_reason:'' });
+  await idbPut('leave', l);
+  await logAction('holiday_cancel_withdrawn', { employee_id:l.employee_id, leave_id:id });
+  toast('Cancellation request withdrawn'); refreshLeaveViews();
+}
+async function decideCancellation(id, approve){
+  const l = await idbGet('leave', id);
+  if (!l || !isCancelRequest(l)){ toast('No cancellation request found','error'); refreshLeaveViews(); return; }
+  if (!canDecideCancel(l)){ toast('Not permitted','error'); return; }
+  if (approve && l.start_date <= today() && !confirm('This holiday has already started. Cancel it anyway?')) return;
+  Object.assign(l, { cancel_requested:false, cancel_outcome: approve?'approved':'declined', cancel_decided_by: state.user.username, cancel_decided_at: nowISO() });
+  if (approve) l.status = 'cancelled';
+  await idbPut('leave', l);
+  await logAction(approve?'holiday_cancel_approved':'holiday_cancel_declined', { employee_id:l.employee_id, leave_id:id });
+  toast(approve ? 'Cancellation approved — days returned to balance' : 'Cancellation declined — holiday stays booked');
+  refreshLeaveViews();
+}
 
 async function leaveForm(presetEmp, asEmployee, presetType){
   const isSelf = asEmployee === true;
@@ -2332,8 +2414,13 @@ async function renderMyLeave(c){
   c.innerHTML = balanceTiles(bal, id) + `
     <div class="card"><div class="card-head"><h3>My holiday</h3><button class="btn btn-accent btn-sm" onclick="leaveForm(null,true)">+ Book holiday</button></div>
       ${holidays.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th><th></th></tr></thead><tbody>${
-        holidays.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td><td style="text-align:right">${l.status==='pending'?`<button class="btn btn-outline btn-sm" onclick="cancelMyLeave('${l.id}')">Cancel</button>`:''}</td></tr>`).join('')
+        holidays.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusCell(l)}</td><td class="small">${esc(l.reason)||'—'}${l.cancel_requested&&l.cancel_reason?`<div class="muted">Cancellation reason: ${esc(l.cancel_reason)}</div>`:''}</td><td style="text-align:right;white-space:nowrap">${
+          l.status==='pending' ? `<button class="btn btn-outline btn-sm" onclick="cancelMyLeave('${l.id}')">Cancel</button>`
+          : canRequestCancel(l) ? `<button class="btn btn-outline btn-sm" onclick="cancelRequestForm('${l.id}')">Request cancellation</button>`
+          : isCancelRequest(l) ? `<button class="btn btn-outline btn-sm" onclick="withdrawCancelRequest('${l.id}')">Withdraw request</button>` : ''
+        }</td></tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">No holiday booked yet.</div>'}
+      <p class="small muted" style="margin-top:10px">Need to cancel an approved holiday that hasn't started yet? Use <strong>Request cancellation</strong> — it goes to your manager for approval, and the holiday stays booked until they approve it.</p>
     </div>
     ${adjustments.length?`<div class="card"><div class="card-head"><h3>Holiday adjustments</h3></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Change</th><th>Note</th></tr></thead><tbody>${
       adjustments.map(a=>`<tr><td>${fmtDate(a.start_date)}</td><td><strong>${a.days>=0?'+':''}${a.days} day${Math.abs(a.days)!==1?'s':''}</strong></td><td class="small">${esc(a.reason)||'—'}</td></tr>`).join('')
