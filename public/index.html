@@ -1262,7 +1262,8 @@ function empTabEmployment(body, id){
     <dt>End date</dt><dd>${fmtDate(e.end_date)}</dd>
     <dt>Status</dt><dd>${statusBadge(e.status)}</dd>
     ${showSalary?`<dt>Salary</dt><dd>${revealHtml(`${fmtMoney(e.salary)} (${esc(e.pay_frequency)})`)}</dd>
-    <dt>Bank details</dt><dd>${e.bank_sort_code||e.bank_account ? revealHtml(`Sort code ${esc(e.bank_sort_code)||'—'} · Account ${esc(e.bank_account)||'—'}`) : '—'}</dd>`:''}
+    <dt>Bank sort code</dt><dd>${esc(e.bank_sort_code)||'—'}</dd>
+    <dt>Bank account</dt><dd>${esc(e.bank_account)||'—'}</dd>`:''}
     <dt>Holiday allowance</dt><dd>${e.holiday_allowance} days/yr</dd>
     <dt>Notes</dt><dd>${esc(e.notes)||'—'}</dd>
   </dl></div>`;
