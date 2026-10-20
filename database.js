@@ -65,6 +65,9 @@ function initializeSchema() {
       work_email TEXT,
       mobile_phone TEXT,
       home_phone TEXT,
+      work_phone TEXT,
+      work_mobile TEXT,
+      is_director INTEGER DEFAULT 0,
       job_title TEXT,
       department TEXT,
       site TEXT,
@@ -120,15 +123,66 @@ function initializeSchema() {
       mime_type TEXT,
       file_path TEXT,
       description TEXT,
+      ack INTEGER DEFAULT 0,
+      ack_deadline TEXT,
       uploaded_by TEXT,
       uploaded_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+  // "Read and understood" confirmations for company documents with ack = 1
+  db.run(`
+    CREATE TABLE IF NOT EXISTS doc_acks (
+      id TEXT PRIMARY KEY,
+      document_id TEXT NOT NULL REFERENCES documents(id),
+      employee_id TEXT NOT NULL REFERENCES employees(id),
+      acknowledged_at TEXT DEFAULT (datetime('now')),
+      user TEXT,
+      UNIQUE(document_id, employee_id)
+    )
+  `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS jobs (
+      id TEXT PRIMARY KEY,
+      employee_id TEXT NOT NULL REFERENCES employees(id),
+      job_title TEXT NOT NULL,
+      department TEXT,
+      site TEXT,
+      employment_type TEXT,
+      start_date TEXT,
+      end_date TEXT,
+      reason TEXT,
+      notes TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS one_to_ones (
+      id TEXT PRIMARY KEY,
+      employee_id TEXT NOT NULL REFERENCES employees(id),
+      with_id TEXT REFERENCES employees(id),
+      type TEXT,
+      date TEXT,
+      time TEXT,
+      location TEXT,
+      agenda TEXT,
+      status TEXT NOT NULL DEFAULT 'scheduled' CHECK(status IN ('requested','scheduled','completed','declined','cancelled')),
+      notes TEXT,
+      actions TEXT,
+      private_notes TEXT,
+      employee_notes TEXT,
+      requested_by TEXT,
+      decided_by TEXT,
+      decided_at TEXT,
+      completed_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
     )
   `);
   db.run(`
     CREATE TABLE IF NOT EXISTS leave (
       id TEXT PRIMARY KEY,
       employee_id TEXT NOT NULL REFERENCES employees(id),
-      type TEXT NOT NULL CHECK(type IN ('holiday','sickness','unpaid','maternity','other','adjustment')),
+      type TEXT NOT NULL CHECK(type IN ('holiday','sickness','adoption','charity','compassionate','jury_service','maternity','medical','parental','paternity','study','training_day','unauthorised','unpaid','other','adjustment')),
       start_date TEXT NOT NULL,
       end_date TEXT NOT NULL,
       days REAL NOT NULL,
@@ -245,6 +299,10 @@ function initializeSchema() {
   db.run('CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_to)');
   db.run('CREATE INDEX IF NOT EXISTS idx_training_emp ON training(employee_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_paydocs_emp ON pay_documents(employee_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_jobs_emp ON jobs(employee_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_one_to_ones_emp ON one_to_ones(employee_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_doc_acks_doc ON doc_acks(document_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_doc_acks_emp ON doc_acks(employee_id)');
 
   // Default settings
   db.run("INSERT OR IGNORE INTO settings (key, value) VALUES ('holiday_year_start', '01-01')");
