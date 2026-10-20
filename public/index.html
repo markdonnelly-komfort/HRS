@@ -665,7 +665,7 @@ const NAV = {
     { id:'announcements', label:'Announcements',    ic:'✉' },
     { id:'employees',     label:'Employees',        ic:'☺' },
     { id:'org-chart',     label:'Organisation Chart',ic:'☷' },
-    { id:'calendar',      label:'Calendar',         ic:'▥' },
+    { id:'calendar',      label:'Holiday Calendar', ic:'▥' },
     { id:'leave-holiday', label:'Holiday',          ic:'✈', badge:'pendingHoliday' },
     { id:'company-days',  label:'Bank Holidays & Shutdowns', ic:'⚑' },
     { id:'leave-sickness',label:'Sickness',         ic:'＋', badge:'sicknessActions' },
@@ -684,7 +684,7 @@ const NAV = {
     { id:'dashboard',     label:'Dashboard',        ic:'▦' },
     { id:'announcements', label:'Announcements',    ic:'✉', badge:'newAnnouncements' },
     { id:'team',          label:'My Team',          ic:'☺' },
-    { id:'calendar',      label:'Team Calendar',    ic:'▥' },
+    { id:'calendar',      label:'Holiday Calendar', ic:'▥' },
     { id:'leave-holiday', label:'Team Holiday',     ic:'✈', badge:'pendingHoliday' },
     { id:'leave-sickness',label:'Team Sickness',    ic:'＋', badge:'sicknessActions' },
     { id:'leave-other',   label:'Team Absences',    ic:'⋯', badge:'pendingOther' },
@@ -705,7 +705,7 @@ const NAV = {
     { id:'announcements', label:'Announcements',    ic:'✉', badge:'newAnnouncements' },
     { id:'my-profile',    label:'My Profile',       ic:'☺' },
     { id:'my-leave',      label:'My Holiday',       ic:'✈' },
-    { id:'calendar',      label:'Team Calendar',    ic:'▥' },
+    { id:'calendar',      label:'Holiday Calendar', ic:'▥' },
     { id:'my-sickness',   label:'My Sickness',      ic:'＋' },
     { id:'my-other',      label:'My Other Absences',ic:'⋯' },
     { id:'my-performance',label:'My Performance',   ic:'★' },
@@ -785,7 +785,7 @@ async function navigate(page){
   document.getElementById('sidebar').classList.remove('open');
   await refreshCaches();
   const mgr = state.user.role==='manager';
-  const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', 'leave-holiday':mgr?'Team Holiday':'Holiday', 'leave-sickness':mgr?'Team Sickness':'Sickness', 'leave-other':mgr?'Team Absences':'Other Absences', performance:mgr?'Team Performance':'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: mgr?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-sickness':'My Sickness', 'my-other':'My Other Absences', 'my-performance':'My Performance', training: mgr?'Team Training':'Training', 'my-training':'My Training', 'my-payslips':'My Payslips', 'payslip-uploads':'Payslip Uploads', 'org-chart':'Organisation Chart', calendar: state.user.role==='hr_admin'?'Calendar':'Team Calendar', announcements:'Announcements', 'company-days':'Bank Holidays & Shutdowns', audit:'Audit Trail' };
+  const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', 'leave-holiday':mgr?'Team Holiday':'Holiday', 'leave-sickness':mgr?'Team Sickness':'Sickness', 'leave-other':mgr?'Team Absences':'Other Absences', performance:mgr?'Team Performance':'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: mgr?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-sickness':'My Sickness', 'my-other':'My Other Absences', 'my-performance':'My Performance', training: mgr?'Team Training':'Training', 'my-training':'My Training', 'my-payslips':'My Payslips', 'payslip-uploads':'Payslip Uploads', 'org-chart':'Organisation Chart', calendar:'Holiday Calendar', announcements:'Announcements', 'company-days':'Bank Holidays & Shutdowns', audit:'Audit Trail' };
   document.getElementById('page-title').textContent = titles[page] || page;
   const c = document.getElementById('content');
   c.innerHTML = '<div class="empty">Loading…</div>';
@@ -2611,21 +2611,30 @@ const CAL_KINDS = {
 };
 function calState(){
   if (!window._cal || window._cal.user!==state.user.id)
-    window._cal = { user: state.user.id, ym: today().slice(0,7), scope: state.user.role==='hr_admin'?'all':'team', dept:'', site:'', show:{ hol:true, sick:true, oth:true, oo:true } };
+    window._cal = { user: state.user.id, ym: today().slice(0,7), scope: { hr_admin:'all', manager:'team', employee:'dept' }[state.user.role], dept:'', site:'', show:{ hol:true, sick:true, oth:true, oo:true } };
   return window._cal;
+}
+// Who to show: My team (managers), My department, or Everyone. HR always sees everyone.
+function calScopeOptions(){
+  if (state.user.role==='hr_admin') return [];
+  return [...(state.user.role==='manager' ? [['team','My team']] : []), ['dept','My department'], ['all','Everyone']];
 }
 async function renderCalendar(c){
   const s = calState();
-  const isHR = state.user.role==='hr_admin';
+  const scopes = calScopeOptions();
+  if (scopes.length && !scopes.some(([v])=>v===s.scope)) s.scope = scopes[0][0];
   const chk = (k, txt) => `<label><input type="checkbox" id="cal-show-${k}" onchange="calFilter()" ${s.show[k]?'checked':''}> <span class="cal-chip ${CAL_KINDS[k].cls}">${CAL_KINDS[k].ch}</span> ${txt}</label>`;
+  // A department filter only makes sense when looking at everyone
+  const showDept = !scopes.length || s.scope==='all';
+  if (!showDept) s.dept = '';
   c.innerHTML = `
     <div class="toolbar">
       <button class="btn btn-outline btn-sm" onclick="calMove(-1)" aria-label="Previous month">‹</button>
       <strong id="cal-month" style="min-width:130px;text-align:center"></strong>
       <button class="btn btn-outline btn-sm" onclick="calMove(1)" aria-label="Next month">›</button>
       <button class="btn btn-outline btn-sm" onclick="calMove(0)">Today</button>
-      ${isHR?'':`<select id="cal-scope" onchange="calFilter()"><option value="team" ${s.scope==='team'?'selected':''}>My team</option><option value="all" ${s.scope==='all'?'selected':''}>Everyone</option></select>`}
-      <select id="cal-dept" onchange="calFilter()"><option value="">All departments</option>${optionList(DEPARTMENTS, s.dept)}</select>
+      ${scopes.length?`<select id="cal-scope" onchange="calScopeChanged()">${scopes.map(([v,t])=>`<option value="${v}" ${s.scope===v?'selected':''}>${t}</option>`).join('')}</select>`:''}
+      ${showDept?`<select id="cal-dept" onchange="calFilter()"><option value="">All departments</option>${optionList(DEPARTMENTS, s.dept)}</select>`:''}
       <select id="cal-site" onchange="calFilter()"><option value="">All sites</option>${optionList(SITES, s.site)}</select>
     </div>
     <div class="cal-legend">
@@ -2634,10 +2643,12 @@ async function renderCalendar(c){
     </div>
     <div class="card" id="cal-body"></div>`;
   // optionList keeps the current value selected, but "" (all) must stay selected when nothing is chosen
-  if (!s.dept) document.getElementById('cal-dept').value = '';
+  if (!s.dept && document.getElementById('cal-dept')) document.getElementById('cal-dept').value = '';
   if (!s.site) document.getElementById('cal-site').value = '';
   await drawCalendar();
 }
+// Changing who to show rebuilds the toolbar (the department filter appears only for "Everyone")
+function calScopeChanged(){ calState().scope = val('cal-scope'); renderCalendar(document.getElementById('content')); }
 function calMove(n){
   const s = calState();
   if (!n) s.ym = today().slice(0,7);
@@ -2647,16 +2658,16 @@ function calMove(n){
 function calFilter(){
   const s = calState();
   if (document.getElementById('cal-scope')) s.scope = val('cal-scope');
-  s.dept = val('cal-dept'); s.site = val('cal-site');
+  s.dept = val('cal-dept'); s.site = val('cal-site');  // val() is '' when the department filter is hidden
   Object.keys(s.show).forEach(k => { const el = document.getElementById('cal-show-'+k); if (el) s.show[k] = el.checked; });
   drawCalendar();
 }
 function calPeople(s){
   const me = state.user.employee_id, role = state.user.role;
   let list = state.employees.filter(e=>e.status!=='leaver');
-  if (role!=='hr_admin' && s.scope==='team'){
-    if (role==='manager') list = list.filter(e=>e.id===me || e.manager_id===me);
-    else { const mgr = empById(me)?.manager_id; list = list.filter(e=>e.id===me || (mgr && (e.manager_id===mgr || e.id===mgr))); }
+  if (role!=='hr_admin'){
+    if (s.scope==='team' && role==='manager') list = list.filter(e=>e.id===me || e.manager_id===me);
+    else if (s.scope==='dept'){ const dept = empById(me)?.department; list = list.filter(e=>e.id===me || (dept && e.department===dept)); }
   }
   if (s.dept) list = list.filter(e=>e.department===s.dept);
   if (s.site) list = list.filter(e=>e.site===s.site);
