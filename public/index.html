@@ -217,6 +217,9 @@
     .cal-chip.pending { background: #fff; color: var(--info); box-shadow: inset 0 0 0 2px var(--info); }
     .cal-grid .closed { background: repeating-linear-gradient(135deg, #e7eaee, #e7eaee 4px, #f4f6f7 4px, #f4f6f7 8px); }
     .cal-grid th.closed.today { background: var(--accent); }
+    /* Keep closed days and today distinguishable on the highlighted row */
+    .cal-grid tbody tr:hover td.closed { background: repeating-linear-gradient(135deg, #dde1e6, #dde1e6 4px, #eceff2 4px, #eceff2 8px); }
+    .cal-grid tbody tr:hover td.today:not(.closed) { background: #fff3c4; }
     .cal-cd { font-size: 0.6rem; font-weight: 700; color: var(--primary-light); }
     .cal-closed { background: #cfd4d9; color: var(--primary); }
     @media (max-width: 600px){ .cal-grid .cal-name { min-width: 110px; max-width: 130px; padding: 6px; font-size: 0.8rem; } }
