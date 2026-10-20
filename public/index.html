@@ -181,6 +181,16 @@
     .doc-row { flex-wrap: wrap; }
     .doc-row .doc-btns { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
     .ack-banner { border-left: 5px solid var(--accent); background: #fffbea; }
+    .reveal .reveal-val { display: none; cursor: pointer; }
+    .reveal.shown .reveal-val { display: inline; }
+    .reveal.shown .btn { display: none; }
+    .rtw-bf { background: var(--bg); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; }
+    .ann-card.pinned { border-left: 5px solid var(--accent); }
+    .ann-card.expired { opacity: .6; }
+    .ann-body { white-space: pre-wrap; line-height: 1.5; overflow-wrap: anywhere; }
+    .ann-mini { padding: 10px 0; border-bottom: 1px solid var(--border); }
+    .ann-mini:last-child { border-bottom: 0; }
+    .ann-snip { margin-top: 4px; white-space: pre-wrap; color: var(--text); }
     .ack-banner .doc-row { background: #fff; }
 
     /* ── Team calendar (people × days) ── */
@@ -205,6 +215,10 @@
     .cal-away { background: #9aa0a6; color: #fff; }
     .cal-oo { background: var(--primary-light); color: var(--accent); }
     .cal-chip.pending { background: #fff; color: var(--info); box-shadow: inset 0 0 0 2px var(--info); }
+    .cal-grid .closed { background: repeating-linear-gradient(135deg, #e7eaee, #e7eaee 4px, #f4f6f7 4px, #f4f6f7 8px); }
+    .cal-grid th.closed.today { background: var(--accent); }
+    .cal-cd { font-size: 0.6rem; font-weight: 700; color: var(--primary-light); }
+    .cal-closed { background: #cfd4d9; color: var(--primary); }
     @media (max-width: 600px){ .cal-grid .cal-name { min-width: 110px; max-width: 130px; padding: 6px; font-size: 0.8rem; } }
 
     /* ── Organisation chart (top-down tree with connector lines) ── */
@@ -316,8 +330,9 @@ const DB_NAME = 'KomfortHR';
 // object stores dropped) rather than hitting an IndexedDB version-downgrade error.
 // v5: training records + uploaded pay documents (payslips / P60 / P11D).
 // v6: job history, one-to-ones, policy read-and-understood confirmations.
-const DB_VERSION = 6;
-const STORES = ['users','employees','contacts','documents','leave','reviews','objectives','tasks','audit_log','settings','training','pay_documents','jobs','one_to_ones','doc_acks'];
+// v7: bank holidays / shutdown days, return-to-work interviews, announcements.
+const DB_VERSION = 7;
+const STORES = ['users','employees','contacts','documents','leave','reviews','objectives','tasks','audit_log','settings','training','pay_documents','jobs','one_to_ones','doc_acks','company_days','rtw','announcements'];
 let db = null;
 
 function openDB() {
@@ -395,6 +410,19 @@ function openDB() {
         s.createIndex('document_id', 'document_id');
         s.createIndex('employee_id', 'employee_id');
       }
+      if (!d.objectStoreNames.contains('company_days')) {
+        // One row per closed day (bank holiday or shutdown day)
+        const s = d.createObjectStore('company_days', { keyPath: 'id' });
+        s.createIndex('date', 'date');
+      }
+      if (!d.objectStoreNames.contains('rtw')) {
+        // Return-to-work interview, one per sickness record (keyed by its leave id)
+        const s = d.createObjectStore('rtw', { keyPath: 'leave_id' });
+        s.createIndex('employee_id', 'employee_id');
+      }
+      if (!d.objectStoreNames.contains('announcements')) {
+        d.createObjectStore('announcements', { keyPath: 'id' });
+      }
       // Drop payroll stores from any browser that ran the removed payroll build.
       ['pay_components','pay_runs','payslips','recurring_deductions'].forEach(s => {
         if (d.objectStoreNames.contains(s)) d.deleteObjectStore(s);
@@ -450,6 +478,13 @@ const OTHER_ABSENCE = Object.keys(LEAVE_TYPES).filter(k => !['holiday','sickness
 const leaveLabel = t => LEAVE_TYPES[t]?.label || t;
 const leaveBadge = t => `<span class="badge ${LEAVE_TYPES[t]?.colour||'b-grey'}">${esc(leaveLabel(t))}</span>`;
 const EMPLOYMENT_TYPES = ['Permanent','Contract','Casual'];
+// Demo seed only — HR imports/maintains the real list on the Bank Holidays & Shutdowns page
+const BANK_HOLIDAYS_EW = [
+  ['2026-01-01',"New Year's Day"],['2026-04-03','Good Friday'],['2026-04-06','Easter Monday'],['2026-05-04','Early May bank holiday'],
+  ['2026-05-25','Spring bank holiday'],['2026-08-31','Summer bank holiday'],['2026-12-25','Christmas Day'],['2026-12-28','Boxing Day (substitute day)'],
+  ['2027-01-01',"New Year's Day"],['2027-03-26','Good Friday'],['2027-03-29','Easter Monday'],['2027-05-03','Early May bank holiday'],
+  ['2027-05-31','Spring bank holiday'],['2027-08-30','Summer bank holiday'],['2027-12-27','Christmas Day (substitute day)'],['2027-12-28','Boxing Day (substitute day)']
+];
 const TITLES = ['Mr','Mrs','Ms','Miss','Mx','Dr','Prof'];
 const DEFAULT_ALLOWANCE = 25;
 
@@ -505,10 +540,21 @@ async function seedDefaults(){
   await idbPut('users', { id:uuid(), username:'manager', password_hash:mgrHash, role:'manager', employee_id:mgrId, full_name:'Sarah Mitchell', must_change_password:false, created_at:nowISO() });
   await idbPut('users', { id:uuid(), username:'employee', password_hash:empHash, role:'employee', employee_id:empId, full_name:'James Okafor', must_change_password:false, created_at:nowISO() });
 
+  // Bank holidays (England & Wales) and a Christmas shutdown: 4 days, one of them free
+  for (const [date, name] of BANK_HOLIDAYS_EW) await idbPut('company_days', { id:uuid(), date, name, kind:'bank_holiday', deducts:false, created_at:nowISO() });
+  for (const [date, deducts] of [['2026-12-24',false],['2026-12-29',true],['2026-12-30',true],['2026-12-31',true]])
+    await idbPut('company_days', { id:uuid(), date, name:'Christmas shutdown', kind:'shutdown', deducts, created_at:nowISO() });
+  await refreshCaches();
+
+  // Sample announcement
+  await idbPut('announcements', { id:uuid(), title:'Christmas shutdown dates', body:'The factory and offices close from Thursday 24 December and reopen on Monday 4 January.\n\n24 December is a free day. 29, 30 and 31 December come out of your holiday allowance, so please keep 3 days back.', audience:'all', pinned:true, expires:null, author:'admin', created_at:nowISO(), updated_at:nowISO() });
+
   // Sample leave
   await idbPut('leave', { id:uuid(), employee_id:empId, type:'holiday', start_date:thisYear()+'-08-04', end_date:thisYear()+'-08-08', days:5, half_day:false, status:'approved', reason:'Summer holiday', requested_at:nowISO(), decided_by:'manager', decided_at:nowISO(), decision_note:'' });
   await idbPut('leave', { id:uuid(), employee_id:empId, type:'holiday', start_date:thisYear()+'-12-22', end_date:thisYear()+'-12-23', days:2, half_day:false, status:'pending', reason:'Christmas', requested_at:nowISO(), decided_by:null, decided_at:null, decision_note:'' });
   await idbPut('leave', { id:uuid(), employee_id:empId, type:'sickness', start_date:thisYear()+'-03-10', end_date:thisYear()+'-03-11', days:2, half_day:false, status:'approved', reason:'Flu', requested_at:nowISO(), decided_by:'admin', decided_at:nowISO(), decision_note:'Self-certified' });
+  // Recent sickness with no return-to-work interview yet
+  await idbPut('leave', { id:uuid(), employee_id:e4, type:'sickness', start_date:addDays(today(),-8), end_date:addDays(today(),-7), days:workingDays(addDays(today(),-8),addDays(today(),-7)), half_day:false, status:'approved', reason:'Back pain', requested_at:nowISO(), decided_by:'manager', decided_at:nowISO(), decision_note:'' });
   await idbPut('leave', { id:uuid(), employee_id:e3, type:'holiday', start_date:thisYear()+'-07-01', end_date:thisYear()+'-07-04', days:4, half_day:false, status:'approved', reason:'', requested_at:nowISO(), decided_by:'manager', decided_at:nowISO(), decision_note:'' });
   // A few entries close to today so the team calendar has something to show
   await idbPut('leave', { id:uuid(), employee_id:e3, type:'holiday', start_date:addDays(today(),8), end_date:addDays(today(),10), days:workingDays(addDays(today(),8),addDays(today(),10)), half_day:false, status:'approved', reason:'Long weekend', requested_at:nowISO(), decided_by:'manager', decided_at:nowISO(), decision_note:'' });
@@ -560,7 +606,7 @@ function addDays(dateStr, n){ const d = new Date(dateStr); d.setDate(d.getDate()
 // ═══════════════════════════════════════════════
 // AUTH + STATE
 // ═══════════════════════════════════════════════
-const state = { user: null, page: null, employees: [], usersById: {} };
+const state = { user: null, page: null, employees: [], usersById: {}, companyDays: [], closedDays: new Set() };
 
 async function handleLogin(e){
   e.preventDefault();
@@ -568,9 +614,9 @@ async function handleLogin(e){
   const p = document.getElementById('login-password').value;
   const all = await idbGetAll('users');
   const user = all.find(x => x.username.toLowerCase() === u);
-  if (!user){ toast('Invalid username or password','error'); return; }
+  if (!user){ await logAction('login_failed', { username:u }); toast('Invalid username or password','error'); return; }
   const hash = await sha256(p);
-  if (hash !== user.password_hash){ toast('Invalid username or password','error'); return; }
+  if (hash !== user.password_hash){ await logAction('login_failed', { username:u }); toast('Invalid username or password','error'); return; }
   state.user = user;
   sessionStorage.setItem('hr_session', user.id);
   await logAction('login');
@@ -591,6 +637,7 @@ async function enterApp(){
 function roleLabel(r){ return ({hr_admin:'HR Admin', manager:'Manager', employee:'Employee'})[r] || r; }
 
 function logout(){
+  if (state.user) logAction('logout');
   state.user = null;
   sessionStorage.removeItem('hr_session');
   document.getElementById('app').classList.remove('active');
@@ -602,6 +649,8 @@ async function refreshCaches(){
   state.employees = await idbGetAll('employees');
   const users = await idbGetAll('users');
   state.usersById = {}; users.forEach(u => state.usersById[u.id] = u);
+  state.companyDays = (await idbGetAll('company_days')).sort((a,b)=>a.date.localeCompare(b.date));
+  state.closedDays = new Set(state.companyDays.map(c=>c.date));
 }
 
 // ═══════════════════════════════════════════════
@@ -610,11 +659,13 @@ async function refreshCaches(){
 const NAV = {
   hr_admin: [
     { id:'dashboard',     label:'Dashboard',        ic:'▦' },
+    { id:'announcements', label:'Announcements',    ic:'✉' },
     { id:'employees',     label:'Employees',        ic:'☺' },
     { id:'org-chart',     label:'Organisation Chart',ic:'☷' },
     { id:'calendar',      label:'Calendar',         ic:'▥' },
     { id:'leave-holiday', label:'Holiday',          ic:'✈', badge:'pendingHoliday' },
-    { id:'leave-sickness',label:'Sickness',         ic:'＋', badge:'pendingSickness' },
+    { id:'company-days',  label:'Bank Holidays & Shutdowns', ic:'⚑' },
+    { id:'leave-sickness',label:'Sickness',         ic:'＋', badge:'sicknessActions' },
     { id:'leave-other',   label:'Other Absences',   ic:'⋯', badge:'pendingOther' },
     { id:'performance',   label:'Performance',      ic:'★', badge:'oneToOneRequests' },
     { id:'training',      label:'Training',         ic:'✪', badge:'trainingDue' },
@@ -623,14 +674,16 @@ const NAV = {
     { id:'reports',       label:'Reports',          ic:'▣' },
     { id:'tasks',         label:'HR Tasks',         ic:'✔', badge:'openTasks' },
     { id:'users',         label:'User Accounts',    ic:'⚷' },
+    { id:'audit',         label:'Audit Trail',      ic:'☰' },
     { id:'settings',      label:'Settings',         ic:'⚙' }
   ],
   manager: [
     { id:'dashboard',     label:'Dashboard',        ic:'▦' },
+    { id:'announcements', label:'Announcements',    ic:'✉', badge:'newAnnouncements' },
     { id:'team',          label:'My Team',          ic:'☺' },
     { id:'calendar',      label:'Team Calendar',    ic:'▥' },
     { id:'leave-holiday', label:'Team Holiday',     ic:'✈', badge:'pendingHoliday' },
-    { id:'leave-sickness',label:'Team Sickness',    ic:'＋', badge:'pendingSickness' },
+    { id:'leave-sickness',label:'Team Sickness',    ic:'＋', badge:'sicknessActions' },
     { id:'leave-other',   label:'Team Absences',    ic:'⋯', badge:'pendingOther' },
     { id:'performance',   label:'Team Performance', ic:'★', badge:'oneToOneRequests' },
     { id:'training',      label:'Team Training',    ic:'✪', badge:'trainingDue' },
@@ -646,6 +699,7 @@ const NAV = {
     { id:'tasks',         label:'My Tasks',         ic:'✔', badge:'openTasks' }
   ],
   employee: [
+    { id:'announcements', label:'Announcements',    ic:'✉', badge:'newAnnouncements' },
     { id:'my-profile',    label:'My Profile',       ic:'☺' },
     { id:'my-leave',      label:'My Holiday',       ic:'✈' },
     { id:'calendar',      label:'Team Calendar',    ic:'▥' },
@@ -695,9 +749,15 @@ async function computeBadges(){
   const oneToOneRequests = state.user.role==='employee' ? 0 : (await idbGetAll('one_to_ones')).filter(o=>o.status==='requested' && isOneToOneApprover(o)).length;
   // Policies this person still has to confirm as read & understood
   const docsToAck = state.user.employee_id ? (await outstandingAcks(state.user.employee_id)).length : 0;
+  // Return-to-work interviews the user should hold
+  const rtwDone = state.user.role==='employee' ? null : new Set((await idbGetAll('rtw')).map(r=>r.leave_id));
+  const rtwDueN = rtwDone ? leave.filter(l => isRtwDue(l, rtwDone) && canManageEmp(l.employee_id)).length : 0;
+  // Announcements published since this user last opened the board
+  const newAnnouncements = (await visibleAnnouncements()).filter(a => isNewAnnouncement(a)).length;
   return {
     pendingHoliday: pending.filter(l=>l.type==='holiday').length + (state.user.role==='employee' ? 0 : leave.filter(l=>isCancelRequest(l) && canDecideCancel(l)).length),
-    pendingSickness: pending.filter(l=>l.type==='sickness').length,
+    sicknessActions: pending.filter(l=>l.type==='sickness').length + rtwDueN,
+    newAnnouncements,
     pendingOther: pending.filter(l=>OTHER_ABSENCE.includes(l.type)).length,
     openTasks: openTasks.length,
     trainingDue, newPayDocs, oneToOneRequests, docsToAck
@@ -722,7 +782,7 @@ async function navigate(page){
   document.getElementById('sidebar').classList.remove('open');
   await refreshCaches();
   const mgr = state.user.role==='manager';
-  const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', 'leave-holiday':mgr?'Team Holiday':'Holiday', 'leave-sickness':mgr?'Team Sickness':'Sickness', 'leave-other':mgr?'Team Absences':'Other Absences', performance:mgr?'Team Performance':'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: mgr?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-sickness':'My Sickness', 'my-other':'My Other Absences', 'my-performance':'My Performance', training: mgr?'Team Training':'Training', 'my-training':'My Training', 'my-payslips':'My Payslips', 'payslip-uploads':'Payslip Uploads', 'org-chart':'Organisation Chart', calendar: state.user.role==='hr_admin'?'Calendar':'Team Calendar' };
+  const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', 'leave-holiday':mgr?'Team Holiday':'Holiday', 'leave-sickness':mgr?'Team Sickness':'Sickness', 'leave-other':mgr?'Team Absences':'Other Absences', performance:mgr?'Team Performance':'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: mgr?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-sickness':'My Sickness', 'my-other':'My Other Absences', 'my-performance':'My Performance', training: mgr?'Team Training':'Training', 'my-training':'My Training', 'my-payslips':'My Payslips', 'payslip-uploads':'Payslip Uploads', 'org-chart':'Organisation Chart', calendar: state.user.role==='hr_admin'?'Calendar':'Team Calendar', announcements:'Announcements', 'company-days':'Bank Holidays & Shutdowns', audit:'Audit Trail' };
   document.getElementById('page-title').textContent = titles[page] || page;
   const c = document.getElementById('content');
   c.innerHTML = '<div class="empty">Loading…</div>';
@@ -751,6 +811,9 @@ async function navigate(page){
       case 'payslip-uploads': await renderPayslipUploads(c); break;
       case 'org-chart': await renderOrgChart(c); break;
       case 'calendar': await renderCalendar(c); break;
+      case 'announcements': await renderAnnouncements(c); break;
+      case 'company-days': if (state.user.role!=='hr_admin') throw new Error('Not permitted'); await renderCompanyDays(c); break;
+      case 'audit': if (state.user.role!=='hr_admin') throw new Error('Not permitted'); await renderAudit(c); break;
       default: c.innerHTML = '<div class="empty">Page not found</div>';
     }
   } catch(err){ console.error(err); c.innerHTML = `<div class="empty">Error: ${err.message}</div>`; }
@@ -783,15 +846,24 @@ function fmtMoney(n){ if(n==null||n==='') return '—'; return '£'+Number(n).to
 function statusBadge(s){ const m={active:['Active','b-green'],leaver:['Leaver','b-grey'],on_leave:['On leave','b-amber']}; const [t,c]=m[s]||[s,'b-grey']; return `<span class="badge ${c}">${t}</span>`; }
 function leaveStatusBadge(s){ const m={pending:['Pending','b-amber'],approved:['Approved','b-green'],rejected:['Rejected','b-red'],cancelled:['Cancelled','b-grey']}; const [t,c]=m[s]||[s,'b-grey']; return `<span class="badge ${c}">${t}</span>`; }
 function val(id){ const e=document.getElementById(id); return e? e.value.trim() : ''; }
+// Sensitive value hidden behind a button (e.g. salary when others might see the screen). Click the value to hide it again.
+function revealHtml(html){ return `<span class="reveal"><button type="button" class="btn btn-outline btn-sm" onclick="this.parentElement.classList.add('shown')">Click to reveal</button><span class="reveal-val" title="Click to hide" onclick="this.parentElement.classList.remove('shown')">${html}</span></span>`; }
 function phoneLink(n){ return n ? `<a href="tel:${esc(String(n).replace(/[^\d+]/g,''))}">${esc(n)}</a>` : '—'; }
 function numVal(id){ const v=val(id); return v===''?null:Number(v); }
 
-// working days (Mon–Fri) inclusive
-function workingDays(start, end){
+// Working days (Mon–Fri) inclusive, skipping company closed days (bank
+// holidays and shutdown days) — those are never charged to a booking.
+function workingDays(start, end, closed = state.closedDays){
   let d=new Date(start), e=new Date(end), n=0;
   if (isNaN(d)||isNaN(e)||e<d) return 0;
-  while(d<=e){ const wd=d.getDay(); if(wd!==0&&wd!==6) n++; d.setDate(d.getDate()+1); }
+  while(d<=e){ const wd=d.getDay(); if(wd!==0&&wd!==6 && !closed.has(d.toISOString().slice(0,10))) n++; d.setDate(d.getDate()+1); }
   return n;
+}
+// Shutdown days that come out of holiday allowance for this employee in a holiday year
+function deductingShutdownDays(e, bounds){
+  if (!e) return [];
+  return state.companyDays.filter(c => c.kind==='shutdown' && c.deducts && c.date>=bounds.start && c.date<=bounds.end
+    && (!e.start_date || e.start_date<=c.date) && (!e.end_date || e.end_date>=c.date));
 }
 
 // Holiday year boundaries for a given date
@@ -821,9 +893,12 @@ async function leaveBalance(employeeId){
     else if (l.status==='pending') pending += l.days;
   });
   const entitlement = allowance + adjustments;
+  // Shutdown days marked "uses holiday" are booked for everyone automatically.
+  const shutdown = deductingShutdownDays(e, bounds).length;
+  booked += shutdown;
   // Only BOOKED (approved) holiday is deducted from remaining; pending is shown
   // separately and does NOT reduce the balance until it's approved/booked.
-  return { allowance, adjustments, entitlement, booked, taken: booked, pending, remaining: entitlement - booked, bounds };
+  return { allowance, adjustments, entitlement, booked, shutdown, taken: booked, pending, remaining: entitlement - booked, bounds };
 }
 // Reusable holiday balance tiles. Pass empId to make Booked/Pending clickable.
 function balanceTiles(bal, empId){
@@ -831,7 +906,7 @@ function balanceTiles(bal, empId){
   const pd = empId ? `class="stat warn clickable" onclick="openHolidayList('${empId}','pending')"` : 'class="stat warn"';
   return `<div class="stat-grid">
       <div class="stat"><div class="num">${bal.entitlement}</div><div class="lbl">Entitlement (${bal.bounds.label})${bal.adjustments?` · ${bal.allowance}+${bal.adjustments}`:''}</div></div>
-      <div ${bk}><div class="num">${bal.booked}</div><div class="lbl">Booked</div></div>
+      <div ${bk}><div class="num">${bal.booked}</div><div class="lbl">Booked${bal.shutdown?` (incl. ${bal.shutdown} shutdown)`:''}</div></div>
       <div ${pd}><div class="num">${bal.pending}</div><div class="lbl">Pending approval</div></div>
       <div class="stat ok"><div class="num">${bal.remaining}</div><div class="lbl">Remaining</div></div>
     </div>`;
@@ -840,7 +915,10 @@ function balanceTiles(bal, empId){
 async function openHolidayList(empId, kind){
   const bounds = await holidayYearBounds();
   const rows = (await idbByIndex('leave','employee_id',empId)).filter(l=>l.type==='holiday' && l.start_date>=bounds.start && l.start_date<=bounds.end);
-  const list = (kind==='booked' ? rows.filter(l=>l.status==='approved') : rows.filter(l=>l.status==='pending')).sort((a,b)=>a.start_date.localeCompare(b.start_date));
+  let list = (kind==='booked' ? rows.filter(l=>l.status==='approved') : rows.filter(l=>l.status==='pending'));
+  // Shutdown days that use holiday show alongside bookings
+  if (kind==='booked') list = list.concat(deductingShutdownDays(empById(empId), bounds).map(c=>({ start_date:c.date, end_date:c.date, days:1, reason:`${c.name} (company shutdown)` })));
+  list.sort((a,b)=>a.start_date.localeCompare(b.start_date));
   const label = kind==='booked' ? 'Booked holiday' : 'Pending holiday';
   const body = list.length ? `<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Reason</th></tr></thead><tbody>${list.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty small">None.</div>';
   openModal(`<h2>${label} — ${esc(empName(empId))}</h2><div class="modal-sub">${bounds.label}</div><div>${body}</div><div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Close</button></div>`);
@@ -906,13 +984,19 @@ async function renderDashboard(c){
   const ackC = tracked.length ? await ackCounts(tracked) : {};
   const ackOutstanding = tracked.filter(d => ackC[d.id].done < ackC[d.id].total);
   const myAcks = await myAckCardHtml();
+  const rtwDone = await rtwDoneSet();
+  const rtwDue = leave.filter(l => isRtwDue(l, rtwDone) && canManageEmp(l.employee_id));
+  const closedToday = state.companyDays.find(d => d.date===today());
+  const annHtml = await latestAnnouncementsHtml();
 
   c.innerHTML = `
+    ${closedToday?`<div class="card ack-banner"><strong>Today is ${closedToday.kind==='bank_holiday'?'a bank holiday':'a shutdown day'}: ${esc(closedToday.name)}.</strong></div>`:''}
     <div class="stat-grid">
       <div class="stat clickable" onclick="openDashList('active')"><div class="num">${active.length}</div><div class="lbl">Active employees</div></div>
       <div class="stat info clickable" onclick="openDashList('offtoday')"><div class="num">${offToday.length}</div><div class="lbl">Off today</div></div>
       <div class="stat warn clickable" onclick="openDashList('pending')"><div class="num">${pending.length + cancelReqs.length}</div><div class="lbl">Leave to approve${cancelReqs.length?` (incl. ${cancelReqs.length} cancellation${cancelReqs.length!==1?'s':''})`:''}</div></div>
       <div class="stat ${sickDays>0?'warn':'ok'} clickable" onclick="openDashList('sick')"><div class="num">${sickDays}</div><div class="lbl">Sick days (${bounds.label})</div></div>
+      <div class="stat ${rtwDue.length?'warn':'ok'} clickable" onclick="openDashList('rtw')"><div class="num">${rtwDue.length}</div><div class="lbl">Return-to-work interviews due</div></div>
       <div class="stat ${probDue.length?'warn':''} clickable" onclick="openDashList('probation')"><div class="num">${probDue.length}</div><div class="lbl">Probation reviews due</div></div>
       <div class="stat ${trainingDue.length?'warn':'ok'} clickable" onclick="openDashList('training')"><div class="num">${trainingDue.length}</div><div class="lbl">Training expiring / expired</div></div>
       <div class="stat clickable" onclick="openDashList('tasks')"><div class="num">${myTasks.length}</div><div class="lbl">Open tasks</div></div>
@@ -940,6 +1024,8 @@ async function renderDashboard(c){
     </div>`:''}
 
     ${myAcks}
+
+    ${annHtml}
 
     ${(oo.requests.length || ooSoon.length)?`<div class="card">
       <div class="card-head"><h3>One-to-ones</h3><button class="btn btn-primary btn-sm" onclick="navigate('performance')">View all</button></div>
@@ -1002,6 +1088,12 @@ async function openDashList(kind){
     title = `Sickness — ${total} day${total!==1?'s':''} (${bounds.label})`;
     html = tableWrap('<th>Employee</th><th>From</th><th>To</th><th>Days</th><th>Reason</th>',
       list.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td></tr>`).join(''), 'No sickness recorded this year.');
+  } else if (kind==='rtw'){
+    const done = await rtwDoneSet();
+    const list = (await idbGetAll('leave')).filter(l=>isRtwDue(l, done) && canManageEmp(l.employee_id)).sort((a,b)=>a.end_date.localeCompare(b.end_date));
+    title = `Return-to-work interviews due (${list.length})`;
+    html = tableWrap('<th>Employee</th><th>Off sick</th><th>Days</th><th>Reason</th><th></th>',
+      list.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${fmtDate(l.start_date)}${l.end_date!==l.start_date?' – '+fmtDate(l.end_date):''}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td><td style="text-align:right"><button class="btn btn-accent btn-sm" onclick="closeModal();rtwForm('${l.id}')">Return to work</button></td></tr>`).join(''), `Nothing due — interviews are flagged for sickness that ended in the last ${RTW_DUE_WINDOW} days.`);
   } else if (kind==='probation'){
     const list = state.employees.filter(e=>e.status==='active' && inScope(e.id) && e.probation_end_date && e.probation_end_date<=addDays(today(),45)).sort((a,b)=>a.probation_end_date.localeCompare(b.probation_end_date));
     title = `Probation reviews due (${list.length})`;
@@ -1169,7 +1261,7 @@ function empTabEmployment(body, id){
     <dt>Probation ends</dt><dd>${e.probation_end_date?fmtDate(e.probation_end_date)+(e.probation_end_date>=today()&&e.probation_end_date<=addDays(today(),45)?' <span class="badge b-amber">Review due</span>':(e.probation_end_date<today()?' <span class="badge b-grey">Passed</span>':'')):'—'}</dd>
     <dt>End date</dt><dd>${fmtDate(e.end_date)}</dd>
     <dt>Status</dt><dd>${statusBadge(e.status)}</dd>
-    ${showSalary?`<dt>Salary</dt><dd>${fmtMoney(e.salary)} (${esc(e.pay_frequency)})</dd>
+    ${showSalary?`<dt>Salary</dt><dd>${revealHtml(`${fmtMoney(e.salary)} (${esc(e.pay_frequency)})`)}</dd>
     <dt>Bank sort code</dt><dd>${esc(e.bank_sort_code)||'—'}</dd>
     <dt>Bank account</dt><dd>${esc(e.bank_account)||'—'}</dd>`:''}
     <dt>Holiday allowance</dt><dd>${e.holiday_allowance} days/yr</dd>
@@ -1221,15 +1313,17 @@ async function empTabSickness(body, id){
   const thisYr = all.filter(l=>l.start_date>=bounds.start && l.start_date<=bounds.end);
   const totalDays = thisYr.reduce((a,l)=>a+l.days,0);
   const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id));
+  const bf = bradford(id, all);
+  const done = await rtwDoneSet();
   body.innerHTML = `
     <div class="stat-grid">
       <div class="stat ${totalDays>0?'warn':'ok'}"><div class="num">${totalDays}</div><div class="lbl">Sick days (${bounds.label})</div></div>
       <div class="stat"><div class="num">${thisYr.length}</div><div class="lbl">Episodes (${bounds.label})</div></div>
-      <div class="stat info"><div class="num">${all.length}</div><div class="lbl">Total records</div></div>
+      ${canManage?`<div class="stat info"><div class="num">${bf.score}</div><div class="lbl">Bradford Factor (52 weeks) · ${bf.S} spell${bf.S!==1?'s':''}, ${bf.D} day${bf.D!==1?'s':''}</div></div>`:''}
     </div>
     <div class="card"><div class="card-head"><h3>Sickness absence</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="leaveForm('${id}',false,'sickness')">+ Record sickness</button>`:''}</div>
-      ${all.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Reason / notes</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
-        all.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td>${canManage?`<td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button></td>`:''}</tr>`).join('')
+      ${all.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Reason / notes</th><th>Return to work</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
+        all.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td><td style="white-space:nowrap">${rtwCell(l, done)}</td>${canManage?`<td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button></td>`:''}</tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">No sickness recorded.</div>'}
     </div>`;
 }
@@ -1373,7 +1467,9 @@ async function saveEmployee(ev, id){
   await idbPut('employees', rec);
   // A new starter's first role opens their job history.
   if (!existing) await idbPut('jobs', { id:uuid(), employee_id:rec.id, ...roleOf(rec), start_date:rec.start_date||today(), end_date:null, reason:'Joined', notes:'', created_at:nowISO() });
-  await logAction(id?'employee_update':'employee_create', { employee_id: rec.id });
+  // Record which fields changed (names only, so salary/bank values stay out of the log)
+  const changes = existing ? Object.keys(rec).filter(k => !['updated_at','created_at'].includes(k) && JSON.stringify(existing[k]??'') !== JSON.stringify(rec[k]??'')).map(k=>k.replace(/_/g,' ')).join(', ') : '';
+  await logAction(id?'employee_update':'employee_create', { employee_id: rec.id, ...(changes?{changes}:{}) });
   await refreshCaches();
   closeModal();
   toast(id?'Employee updated':'Employee added');
@@ -1402,10 +1498,11 @@ function fillAddress(targetId, empId){ const e=empById(empId); if(!e)return; con
 async function saveContact(ev, empId, contactId){
   ev.preventDefault();
   await idbPut('contacts', { id: contactId||uuid(), employee_id: empId, name: val('ct-name'), relationship: val('ct-rel'), phone: val('ct-phone'), email: val('ct-email'), address: val('ct-addr') });
+  await logAction('contact_save', { employee_id: empId, detail: val('ct-name') });
   closeModal(); toast('Contact saved');
   refreshEmpTab();
 }
-async function deleteContact(id, empId){ if(!confirm('Delete this contact?'))return; await idbDelete('contacts',id); toast('Contact deleted'); refreshEmpTab(); }
+async function deleteContact(id, empId){ if(!confirm('Delete this contact?'))return; await idbDelete('contacts',id); await logAction('contact_delete', { employee_id: empId }); toast('Contact deleted'); refreshEmpTab(); }
 
 // ── Job history ──
 // Each row is one role held over a date range; the row with no end date is current.
@@ -1460,7 +1557,7 @@ async function saveJob(ev, empId, jobId){
   await logAction('job_history_save', { employee_id: empId });
   closeModal(); toast('Job history saved'); refreshEmpTab();
 }
-async function deleteJob(id){ if(!confirm('Delete this job history entry?'))return; await idbDelete('jobs', id); toast('Deleted'); refreshEmpTab(); }
+async function deleteJob(id){ if(!confirm('Delete this job history entry?'))return; const j=await idbGet('jobs',id); await idbDelete('jobs', id); await logAction('job_history_delete', { employee_id:j?.employee_id, detail:j?.job_title }); toast('Deleted'); refreshEmpTab(); }
 // Offered after HR changes someone's role on the employee form.
 function jobChangePrompt(empId, before){
   const e = empById(empId); if (!e) return;
@@ -1514,6 +1611,21 @@ async function renderLeave(c, category){
   if (state.user.role==='hr_admin' || isMgr) setTopbar(`<button class="btn btn-accent" onclick="leaveForm(null,false,'${meta.preset}')">${meta.recBtn}</button>`);
   const typeCol = showType ? '<th>Type</th>' : '';
   const typeCell = l => showType ? `<td>${leaveBadge(l.type)}</td>` : '';
+  // Sickness: return-to-work interviews and Bradford Factor
+  const isSick = category==='sickness';
+  const rtwDone = isSick ? await rtwDoneSet() : null;
+  const rtwDue = isSick ? leave.filter(l=>isRtwDue(l, rtwDone) && canManageEmp(l.employee_id)).sort((a,b)=>a.end_date.localeCompare(b.end_date)) : [];
+  const rtwCol = isSick ? '<th>Return to work</th>' : '';
+  const rtwTd = l => isSick ? `<td style="white-space:nowrap">${rtwCell(l, rtwDone)}</td>` : '';
+  let sickExtra = '';
+  if (isSick){
+    const people = state.employees.filter(e => e.status!=='leaver' && (!scope || scope.includes(e.id)));
+    sickExtra = `<div class="card"><div class="card-head"><h3>Return-to-work interviews due (${rtwDue.length})</h3></div>
+      ${rtwDue.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Off sick</th><th>Days</th><th>Reason</th><th></th></tr></thead><tbody>${
+        rtwDue.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${fmtDate(l.start_date)}${l.end_date!==l.start_date?' – '+fmtDate(l.end_date):''}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td><td style="text-align:right"><button class="btn btn-accent btn-sm" onclick="rtwForm('${l.id}')">Return to work</button></td></tr>`).join('')
+      }</tbody></table></div>`:`<div class="empty small">All caught up. Interviews are flagged for sickness that ended in the last ${RTW_DUE_WINDOW} days.</div>`}
+    </div>` + bradfordTableHtml(people, leave);
+  }
   c.innerHTML = `
     <div class="card">
       <div class="card-head"><h3>Awaiting approval (${pending.length})</h3></div>
@@ -1527,10 +1639,11 @@ async function renderLeave(c, category){
         cancelReqs.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${fmtDate(l.cancel_requested_at)}</td><td class="small">${esc(l.cancel_reason)||'—'}</td><td style="text-align:right;white-space:nowrap">${cancelDecisionButtons(l)}</td></tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">No cancellation requests.</div>'}
     </div>`:''}
+    ${sickExtra}
     <div class="card">
       <div class="card-head"><h3>${meta.recTitle}</h3></div>
-      ${records.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th>${typeCol}<th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th></tr></thead><tbody>${
-        records.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td>${typeCell(l)}<td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusCell(l)}</td><td class="small">${esc(l.reason)||'—'}</td></tr>`).join('')
+      ${records.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th>${typeCol}<th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${rtwCol}</tr></thead><tbody>${
+        records.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td>${typeCell(l)}<td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusCell(l)}</td><td class="small">${esc(l.reason)||'—'}</td>${rtwTd(l)}</tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">No records.</div>'}
     </div>`;
 }
@@ -1548,7 +1661,7 @@ async function decideLeave(id, decision){
   toast('Leave '+decision);
   refreshLeaveViews();
 }
-async function deleteLeave(id){ if(!confirm('Delete this leave record?'))return; await idbDelete('leave',id); toast('Deleted'); refreshLeaveViews(); }
+async function deleteLeave(id){ if(!confirm('Delete this leave record?'))return; const l=await idbGet('leave',id); await idbDelete('leave',id); await logAction('leave_delete', { employee_id:l?.employee_id, detail: l?`${leaveLabel(l.type)} ${l.start_date} to ${l.end_date} (${l.days} days)`:'' }); toast('Deleted'); refreshLeaveViews(); }
 
 // ── Cancellation of approved, not-yet-started holiday ──
 // The booking stays "approved" (and counts against the balance) until the
@@ -1630,7 +1743,7 @@ async function leaveForm(presetEmp, asEmployee, presetType){
         <div class="form-group"><label class="req">To</label><input id="lv-end" type="date" value="${today()}" onchange="recalcLeaveDays()" required></div>
       </div>
       <div class="form-row">
-        <div class="form-group"><label>Working days</label><input id="lv-days" type="number" step="0.5" value="1"><div class="small muted">Auto (Mon–Fri); adjust if needed.</div></div>
+        <div class="form-group"><label>Working days</label><input id="lv-days" type="number" step="0.5" value="1"><div class="small muted">Auto: Mon–Fri, excluding bank holidays and shutdown days. Adjust if needed.</div></div>
         ${isSelf?'':`<div class="form-group"><label>Status</label><select id="lv-status"><option value="approved">Booked (approved)</option><option value="pending">Pending approval</option></select><div class="small muted">Pending doesn't reduce the balance until booked.</div></div>`}
       </div>
       <div class="form-group"><label>Reason / notes</label><textarea id="lv-reason" rows="2"></textarea></div>
@@ -1793,10 +1906,11 @@ async function saveObjective(ev, empId, objId){
   const all = await idbGetAll('objectives');
   const existing = objId ? all.find(x=>x.id===objId) : null;
   await idbPut('objectives', { id: objId||uuid(), employee_id: empId, title: val('ob-title'), description: val('ob-desc'), target_date: val('ob-date'), status: val('ob-status'), progress: Number(document.getElementById('ob-prog').value), created_at: existing?.created_at||nowISO() });
+  await logAction('objective_save', { employee_id: empId, detail: val('ob-title') });
   closeModal(); toast('Objective saved');
   refreshAfterDetail('Performance','performance');
 }
-async function deleteObjective(id, empId){ if(!confirm('Delete this objective?'))return; await idbDelete('objectives',id); closeModal(); toast('Deleted'); refreshAfterDetail('Performance','performance'); }
+async function deleteObjective(id, empId){ if(!confirm('Delete this objective?'))return; await idbDelete('objectives',id); await logAction('objective_delete', { employee_id: empId }); closeModal(); toast('Deleted'); refreshAfterDetail('Performance','performance'); }
 
 function refreshAfterDetail(tabText, page){
   if (window._detailEmp){ const t=[...document.querySelectorAll('#emp-tabs .tab')].find(x=>x.textContent.trim()===tabText||x.textContent.includes(tabText)); if(t){ empTab(tabText==='Performance'?'performance':'leave', t); return; } }
@@ -1884,7 +1998,7 @@ async function saveDoc(ev, empId){
   const rec = { id:uuid(), employee_id: empId||null, category: val('dc-cat'), title: val('dc-title'), filename: file.name, mime_type: file.type, data, description: val('dc-desc'), uploaded_by: state.user.username, uploaded_at: nowISO() };
   if (!empId) applyAckFields(rec);
   await idbPut('documents', rec);
-  await logAction('document_upload', { employee_id: empId||null });
+  await logAction('document_upload', { employee_id: empId||null, detail: rec.title });
   closeModal(); toast('Document uploaded');
   if (empId){ empTab('documents', [...document.querySelectorAll('#emp-tabs .tab')].find(t=>t.textContent.includes('Documents'))); }
   else navigate('documents');
@@ -1893,9 +2007,9 @@ async function downloadDoc(id){
   const d = await idbGet('documents', id);
   if (!d) return;
   const a = document.createElement('a'); a.href = d.data; a.download = d.filename || (d.title+'.bin'); a.click();
-  await logAction('document_download', { document_id:id });
+  await logAction('document_download', { document_id:id, detail:d.title });
 }
-async function deleteDoc(id){ if(!confirm('Delete this document?'))return; const d=await idbGet('documents',id); await idbDelete('documents',id); for (const a of await idbByIndex('doc_acks','document_id',id)) await idbDelete('doc_acks',a.id); toast('Deleted'); if(d&&d.employee_id){ empTab('documents',[...document.querySelectorAll('#emp-tabs .tab')].find(t=>t.textContent.includes('Documents'))); } else navigate('documents'); }
+async function deleteDoc(id){ if(!confirm('Delete this document?'))return; const d=await idbGet('documents',id); await idbDelete('documents',id); for (const a of await idbByIndex('doc_acks','document_id',id)) await idbDelete('doc_acks',a.id); await logAction('document_delete', { employee_id:d?.employee_id||null, detail:d?.title }); toast('Deleted'); if(d&&d.employee_id){ empTab('documents',[...document.querySelectorAll('#emp-tabs .tab')].find(t=>t.textContent.includes('Documents'))); } else navigate('documents'); }
 
 // ── Shared stored-file helpers (training certificates, pay documents) ──
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
@@ -2414,7 +2528,7 @@ async function openAckDoc(docId){
   openStoredFile(d, false);
   const o = document.getElementById('ak-opened'); if (o) o.value = '1';
   const h = document.getElementById('ak-hint'); if (h) h.textContent = 'Opened ✓';
-  await logAction('document_open', { document_id: docId });
+  await logAction('document_open', { document_id: docId, detail: d.title });
 }
 async function saveAck(ev, docId){
   ev.preventDefault();
@@ -2422,7 +2536,7 @@ async function saveAck(ev, docId){
   if (!me) return;
   if (!val('ak-opened')){ toast('Please open and read the document first','error'); return; }
   await idbPut('doc_acks', { id: ackKey(docId, me), document_id: docId, employee_id: me, acknowledged_at: nowISO(), user: state.user.username });
-  await logAction('document_acknowledged', { employee_id: me, document_id: docId });
+  await logAction('document_acknowledged', { employee_id: me, document_id: docId, detail: (await idbGet('documents', docId))?.title });
   closeModal(); toast('Thanks — confirmation recorded');
   navigate(state.page);
 }
@@ -2465,7 +2579,7 @@ async function saveDocEdit(ev, docId){
   applyAckFields(d);
   await idbPut('documents', d);
   if (document.getElementById('dc-reset')?.checked){ for (const a of await idbByIndex('doc_acks','document_id',docId)) await idbDelete('doc_acks', a.id); }
-  await logAction('document_update', { document_id: docId });
+  await logAction('document_update', { document_id: docId, detail: d.title + (file?' (new version)':'') });
   closeModal(); toast('Document saved'); navigate('documents');
 }
 // "Documents to confirm" card used on My Profile and the dashboard
@@ -2489,7 +2603,8 @@ const CAL_KINDS = {
   sick: { label:'Sickness',      cls:'cal-sick', ch:'S' },
   oth:  { label:'Other absence', cls:'cal-oth',  ch:'O' },
   away: { label:'Away',          cls:'cal-away', ch:'A' },
-  oo:   { label:'One-to-one',    cls:'cal-oo',   ch:'1:1' }
+  oo:   { label:'One-to-one',    cls:'cal-oo',   ch:'1:1' },
+  closed: { label:'Closed',      cls:'cal-closed', ch:'⚑' }
 };
 function calState(){
   if (!window._cal || window._cal.user!==state.user.id)
@@ -2512,7 +2627,7 @@ async function renderCalendar(c){
     </div>
     <div class="cal-legend">
       ${chk('hol','Holiday')}${chk('sick','Sickness')}${chk('oth','Other absence')}${chk('oo','One-to-ones')}
-      <span class="small muted"><span class="cal-chip cal-hol pending">H</span> pending · ½ half day · <span class="cal-chip cal-away">A</span> away</span>
+      <span class="small muted"><span class="cal-chip cal-hol pending">H</span> pending · ½ half day · <span class="cal-chip cal-away">A</span> away · <span class="cal-chip cal-closed">BH</span> bank holiday · <span class="cal-chip cal-closed">SD</span> shutdown</span>
     </div>
     <div class="card" id="cal-body"></div>`;
   // optionList keeps the current value selected, but "" (all) must stay selected when nothing is chosen
@@ -2560,7 +2675,8 @@ async function drawCalendar(){
   const first = `${s.ym}-01`, last = `${s.ym}-${String(nDays).padStart(2,'0')}`;
   document.getElementById('cal-month').textContent = monthLabel(s.ym);
   const people = calPeople(s), ids = new Set(people.map(e=>e.id));
-  const days = Array.from({length:nDays}, (_,i) => { const ds = `${s.ym}-${String(i+1).padStart(2,'0')}`, wd = new Date(y, m-1, i+1).getDay(); return { ds, d:i+1, wd, we: wd===0||wd===6 }; });
+  const closedMap = new Map(state.companyDays.map(c=>[c.date,c]));
+  const days = Array.from({length:nDays}, (_,i) => { const ds = `${s.ym}-${String(i+1).padStart(2,'0')}`, wd = new Date(y, m-1, i+1).getDay(); return { ds, d:i+1, wd, we: wd===0||wd===6, closed: closedMap.get(ds) }; });
   const cells = {}, entries = [];
   const put = (emp, ds, x) => { cells[emp] = cells[emp]||{}; (cells[emp][ds] = cells[emp][ds]||[]).push(x); };
   const wanted = k => k==='away' ? (s.show.sick||s.show.oth) : s.show[k];
@@ -2570,7 +2686,7 @@ async function drawCalendar(){
     const label = kind==='hol' ? 'Holiday' : kind==='away' ? 'Away' : leaveLabel(l.type);
     const pending = l.status==='pending';
     const tip = `${empName(l.employee_id)} — ${label}${pending?' (pending approval)':''}${l.half_day?' (half day)':''}: ${fmtDate(l.start_date)}${l.end_date!==l.start_date?' to '+fmtDate(l.end_date):''}`;
-    days.forEach(d => { if (!d.we && d.ds>=l.start_date && d.ds<=l.end_date) put(l.employee_id, d.ds, { kind, pending, half:l.half_day, tip }); });
+    days.forEach(d => { if (!d.we && !d.closed && d.ds>=l.start_date && d.ds<=l.end_date) put(l.employee_id, d.ds, { kind, pending, half:l.half_day, tip }); });
     entries.push({ emp:l.employee_id, kind, label: label+(pending?' (pending)':'')+(l.half_day?' (half day)':''), from:l.start_date, to:l.end_date, days: kind==='away'?'':l.days });
   }
   if (s.show.oo){
@@ -2582,19 +2698,23 @@ async function drawCalendar(){
       entries.push({ emp:o.employee_id, kind:'oo', label:`One-to-one with ${o.with_id?empName(o.with_id):'HR'}${o.time?' at '+o.time:''}`, from:o.date, to:o.date, days:'' });
     }
   }
+  // Bank holidays / shutdown days apply to everyone
+  days.filter(d=>d.closed).forEach(d => entries.push({ emp:null, kind:'closed', label:`${d.closed.name} — ${d.closed.kind==='bank_holiday'?'bank holiday':d.closed.deducts?'shutdown (uses holiday)':'shutdown (free day)'}`, from:d.ds, to:d.ds, days:'' }));
   const td = today();
-  const head = `<tr><th class="cal-name">Name</th>${days.map(d=>`<th class="cal-day${d.we?' we':''}${d.ds===td?' today':''}"><div>${'SMTWTFS'[d.wd]}</div><div>${d.d}</div></th>`).join('')}</tr>`;
+  const cls = d => `${d.we?' we':''}${d.closed?' closed':''}${d.ds===td?' today':''}`;
+  const head = `<tr><th class="cal-name">Name</th>${days.map(d=>`<th class="cal-day${cls(d)}"${d.closed?` title="${esc(d.closed.name)}"`:''}><div>${'SMTWTFS'[d.wd]}</div><div>${d.d}</div>${d.closed?`<div class="cal-cd">${d.closed.kind==='bank_holiday'?'BH':'SD'}</div>`:''}</th>`).join('')}</tr>`;
   const rows = people.map(e => {
     const me = e.id===state.user.employee_id;
     return `<tr><td class="cal-name"><a href="#" onclick="event.preventDefault();calPerson('${e.id}')">${esc(e.first_name+' '+e.last_name)}</a>${me?' <span class="badge b-yellow">You</span>':''}<div class="small muted">${esc(e.job_title||'')}</div></td>${
-      days.map(d => `<td class="cal-cell${d.we?' we':''}${d.ds===td?' today':''}">${(cells[e.id]?.[d.ds]||[]).map(x=>`<span class="cal-chip ${CAL_KINDS[x.kind].cls}${x.pending?' pending':''}" title="${esc(x.tip)}">${x.kind!=='oo'&&x.half?'½':CAL_KINDS[x.kind].ch}</span>`).join('')}</td>`).join('')
+      days.map(d => `<td class="cal-cell${cls(d)}">${(cells[e.id]?.[d.ds]||[]).map(x=>`<span class="cal-chip ${CAL_KINDS[x.kind].cls}${x.pending?' pending':''}" title="${esc(x.tip)}">${x.kind!=='oo'&&x.half?'½':CAL_KINDS[x.kind].ch}</span>`).join('')}</td>`).join('')
     }</tr>`;
   }).join('');
-  entries.sort((a,b)=>a.from.localeCompare(b.from) || empName(a.emp).localeCompare(empName(b.emp)));
+  const whoOf = x => x.emp ? empName(x.emp) : 'Everyone';
+  entries.sort((a,b)=>a.from.localeCompare(b.from) || whoOf(a).localeCompare(whoOf(b)));
   body.innerHTML = (people.length ? `<div class="cal-wrap"><table class="cal-grid"><thead>${head}</thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No one matches these filters.</div>')
     + `<div class="card-head" style="margin-top:20px"><h3>${monthLabel(s.ym)} (${entries.length})</h3></div>`
     + (entries.length ? `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>What</th><th>From</th><th>To</th><th>Days</th></tr></thead><tbody>${
-        entries.map(x=>`<tr><td>${esc(empName(x.emp))}</td><td><span class="cal-chip ${CAL_KINDS[x.kind].cls}">${CAL_KINDS[x.kind].ch}</span> ${esc(x.label)}</td><td>${fmtDate(x.from)}</td><td>${fmtDate(x.to)}</td><td>${x.days}</td></tr>`).join('')
+        entries.map(x=>`<tr><td>${x.emp?esc(empName(x.emp)):'<strong>Everyone</strong>'}</td><td><span class="cal-chip ${CAL_KINDS[x.kind].cls}">${CAL_KINDS[x.kind].ch}</span> ${esc(x.label)}</td><td>${fmtDate(x.from)}</td><td>${fmtDate(x.to)}</td><td>${x.days}</td></tr>`).join('')
       }</tbody></table></div>` : '<div class="empty small">Nothing booked this month.</div>');
 }
 function calPerson(id){
@@ -2760,6 +2880,411 @@ async function managedOneToOnes(){
 }
 
 // ═══════════════════════════════════════════════
+// BANK HOLIDAYS & SHUTDOWN DAYS
+// ═══════════════════════════════════════════════
+// One company_days row per closed day. Bank holidays are given in addition
+// to holiday allowance. Shutdown days either use holiday (deducts) or are free.
+// Neither is ever charged to an individual booking (see workingDays).
+const isWeekend = ds => { const wd = new Date(ds).getDay(); return wd===0 || wd===6; };
+const dayName = ds => new Date(ds).toLocaleDateString('en-GB',{weekday:'long'});
+function companyDayBadge(c){
+  if (c.kind==='bank_holiday') return '<span class="badge b-blue">Bank holiday</span>';
+  return c.deducts ? '<span class="badge b-amber">Shutdown · uses holiday</span>' : '<span class="badge b-green">Shutdown · free day</span>';
+}
+async function renderCompanyDays(c){
+  const years = [...new Set([thisYear(), String(+thisYear()+1), ...state.companyDays.map(d=>d.date.slice(0,4))])].sort();
+  const yr = years.includes(window._cdYear) ? window._cdYear : thisYear();
+  const list = state.companyDays.filter(d=>d.date.startsWith(yr));
+  const bh = list.filter(d=>d.kind==='bank_holiday'), sd = list.filter(d=>d.kind==='shutdown');
+  setTopbar(`<button class="btn btn-outline" onclick="importBankHolidays()">Import from GOV.UK</button> <button class="btn btn-accent" onclick="bankHolidayForm()">+ Bank holiday</button> <button class="btn btn-accent" onclick="shutdownForm()">+ Shutdown</button>`);
+  c.innerHTML = `
+    <div class="pill-tabs">${years.map(y=>`<div class="pill ${y===yr?'active':''}" onclick="window._cdYear='${y}';navigate('company-days')">${y}</div>`).join('')}</div>
+    <div class="stat-grid">
+      <div class="stat info"><div class="num">${bh.length}</div><div class="lbl">Bank holidays ${yr}</div></div>
+      <div class="stat"><div class="num">${sd.length}</div><div class="lbl">Shutdown days ${yr}</div></div>
+      <div class="stat warn"><div class="num">${sd.filter(d=>d.deducts).length}</div><div class="lbl">Shutdown days using holiday</div></div>
+    </div>
+    <div class="card"><div class="card-head"><h3>Closed days ${yr}</h3></div>
+      <p class="small muted" style="margin-bottom:12px">These apply to everyone. Bank holidays and free shutdown days are on top of holiday allowance. Shutdown days marked <em>uses holiday</em> are taken from everyone's allowance automatically. None of these days are counted when someone books holiday across them.</p>
+      ${list.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Day</th><th>Name</th><th>Type</th><th></th></tr></thead><tbody>${
+        list.map(d=>`<tr><td>${fmtDate(d.date)}</td><td>${dayName(d.date)}</td><td>${esc(d.name)}</td><td>${companyDayBadge(d)}</td><td style="text-align:right;white-space:nowrap">${d.kind==='shutdown'?`<button class="btn btn-outline btn-sm" onclick="toggleShutdownDeduct('${d.id}')">${d.deducts?'Make free day':'Make it use holiday'}</button> `:''}<button class="btn btn-danger btn-sm" onclick="deleteCompanyDay('${d.id}')">×</button></td></tr>`).join('')
+      }</tbody></table></div>`:`<div class="empty small">No bank holidays or shutdown days for ${yr} yet. Use <strong>Import from GOV.UK</strong> to add the bank holidays.</div>`}
+    </div>`;
+}
+// Re-count bookings that overlap days whose closed status changed. Bookings whose
+// day count was edited by hand (doesn't match the automatic count) are left alone.
+async function recountLeaveForClosedDays(oldClosed){
+  const newClosed = state.closedDays;
+  const changed = [...oldClosed].filter(d=>!newClosed.has(d)).concat([...newClosed].filter(d=>!oldClosed.has(d)));
+  if (!changed.length) return 0;
+  const affected = (await idbGetAll('leave')).filter(l => l.type!=='adjustment' && !l.half_day && ['approved','pending'].includes(l.status) && changed.some(d => d>=l.start_date && d<=l.end_date));
+  let n = 0;
+  for (const l of affected){
+    const before = workingDays(l.start_date, l.end_date, oldClosed);
+    if (Number(l.days) !== before) continue;
+    const after = workingDays(l.start_date, l.end_date, newClosed);
+    if (after !== before){ l.days = after; await idbPut('leave', l); n++; }
+  }
+  if (n) await logAction('leave_recounted', { detail:`${n} booking(s) re-counted after closed days changed` });
+  return n;
+}
+async function saveCompanyDays(rows, msg){
+  const old = new Set(state.closedDays);
+  for (const r of rows) await idbPut('company_days', { id:uuid(), created_at:nowISO(), ...r });
+  await refreshCaches();
+  const n = await recountLeaveForClosedDays(old);
+  await logAction('company_days_add', { detail: rows.map(r=>`${r.date} ${r.name}`).join('; ') });
+  closeModal(); toast(msg + (n?` · ${n} existing booking${n!==1?'s':''} re-counted`:''));
+  if (rows[0]) window._cdYear = rows[0].date.slice(0,4);
+  navigate('company-days');
+}
+function bankHolidayForm(){
+  openModal(`<h2>Add bank holiday</h2><div class="modal-sub">Applies to everyone, in addition to holiday allowance</div>
+    <form onsubmit="saveBankHoliday(event)">
+      <div class="form-row">
+        <div class="form-group"><label class="req">Date</label><input id="bh-date" type="date" required></div>
+        <div class="form-group"><label class="req">Name</label><input id="bh-name" required placeholder="e.g. Spring bank holiday"></div>
+      </div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Add</button></div>
+    </form>`);
+}
+async function saveBankHoliday(ev){
+  ev.preventDefault();
+  const date = val('bh-date');
+  if (state.closedDays.has(date)){ toast('That date is already a closed day','error'); return; }
+  await saveCompanyDays([{ date, name: val('bh-name'), kind:'bank_holiday', deducts:false }], 'Bank holiday added');
+}
+function shutdownForm(){
+  openModal(`<h2>Add shutdown</h2><div class="modal-sub">The business is closed for everyone on these days</div>
+    <form onsubmit="saveShutdown(event)">
+      <div class="form-group"><label class="req">Name</label><input id="sd-name" value="Christmas shutdown" required></div>
+      <div class="form-row">
+        <div class="form-group"><label class="req">From</label><input id="sd-from" type="date" required onchange="shutdownDaysPreview()"></div>
+        <div class="form-group"><label class="req">To</label><input id="sd-to" type="date" required onchange="shutdownDaysPreview()"></div>
+      </div>
+      <div id="sd-days"><div class="small muted">Choose the dates to list the working days.</div></div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Add shutdown</button></div>
+    </form>`);
+}
+// List each weekday in the range (skipping weekends and existing closed days) with a free/uses-holiday choice
+function shutdownDaysPreview(){
+  const from = val('sd-from'), to = val('sd-to') || from, box = document.getElementById('sd-days');
+  if (!from){ box.innerHTML = ''; return; }
+  if (to < from){ box.innerHTML = '<div class="small" style="color:var(--danger)">"To" is before "From".</div>'; return; }
+  const days = []; for (let d = from; d <= to && days.length < 60; d = addDays(d,1)) if (!isWeekend(d) && !state.closedDays.has(d)) days.push(d);
+  box.innerHTML = days.length ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Holiday allowance</th></tr></thead><tbody>${
+    days.map(d=>`<tr><td>${dayName(d)} ${fmtDate(d)}</td><td><select class="sd-day" data-date="${d}" style="padding:6px;border:2px solid var(--border);border-radius:6px"><option value="1">Uses holiday</option><option value="0">Free day</option></select></td></tr>`).join('')
+  }</tbody></table></div><div class="small muted" style="margin-top:6px">Weekends and existing bank holidays are skipped.</div>` : '<div class="small muted">No working days in that range (weekends and existing closed days are skipped).</div>';
+}
+async function saveShutdown(ev){
+  ev.preventDefault();
+  const rows = [...document.querySelectorAll('.sd-day')].map(s => ({ date:s.dataset.date, name: val('sd-name'), kind:'shutdown', deducts: s.value==='1' }));
+  if (!rows.length){ toast('No working days to add','error'); return; }
+  await saveCompanyDays(rows, `${rows.length} shutdown day${rows.length!==1?'s':''} added`);
+}
+async function toggleShutdownDeduct(id){
+  const d = await idbGet('company_days', id); if (!d || d.kind!=='shutdown') return;
+  d.deducts = !d.deducts; await idbPut('company_days', d);
+  await logAction('company_day_update', { detail:`${d.date} ${d.name}: ${d.deducts?'uses holiday':'free day'}` });
+  await refreshCaches(); toast(d.deducts ? 'Now uses holiday' : 'Now a free day'); navigate('company-days');
+}
+async function deleteCompanyDay(id){
+  const d = await idbGet('company_days', id); if (!d) return;
+  if (!confirm(`Remove ${d.name} on ${fmtDate(d.date)}? It becomes a normal working day.`)) return;
+  const old = new Set(state.closedDays);
+  await idbDelete('company_days', id); await refreshCaches();
+  const n = await recountLeaveForClosedDays(old);
+  await logAction('company_day_delete', { detail:`${d.date} ${d.name}` });
+  toast('Removed' + (n?` · ${n} booking${n!==1?'s':''} re-counted`:'')); navigate('company-days');
+}
+async function importBankHolidays(){
+  let events;
+  try { const r = await fetch('https://www.gov.uk/bank-holidays.json'); events = (await r.json())['england-and-wales'].events; }
+  catch(e){ toast('Could not reach GOV.UK — add bank holidays manually','error'); return; }
+  const years = [...new Set(events.map(e=>e.date.slice(0,4)))].filter(y => y >= thisYear()).sort();
+  window._govBH = events;
+  openModal(`<h2>Import bank holidays</h2><div class="modal-sub">England &amp; Wales, from GOV.UK</div>
+    <div class="form-group"><label>Year</label><select id="ib-year" onchange="importBankHolidaysPreview()">${years.map(y=>`<option>${y}</option>`).join('')}</select></div>
+    <div id="ib-list"></div>
+    <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="ib-go" onclick="saveImportedBankHolidays()">Add</button></div>`);
+  importBankHolidaysPreview();
+}
+function importBankHolidaysPreview(){
+  const yr = val('ib-year');
+  const list = (window._govBH||[]).filter(e=>e.date.startsWith(yr));
+  const fresh = list.filter(e=>!state.closedDays.has(e.date));
+  document.getElementById('ib-list').innerHTML = `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Name</th><th></th></tr></thead><tbody>${
+    list.map(e=>`<tr><td>${dayName(e.date)} ${fmtDate(e.date)}</td><td>${esc(e.title)}${e.notes?` <span class="small muted">(${esc(e.notes)})</span>`:''}</td><td>${state.closedDays.has(e.date)?'<span class="badge b-grey">Already added</span>':'<span class="badge b-green">New</span>'}</td></tr>`).join('')
+  }</tbody></table></div>`;
+  const b = document.getElementById('ib-go'); b.textContent = fresh.length ? `Add ${fresh.length} bank holiday${fresh.length!==1?'s':''}` : 'Nothing new to add'; b.disabled = !fresh.length;
+}
+async function saveImportedBankHolidays(){
+  const yr = val('ib-year');
+  const rows = (window._govBH||[]).filter(e=>e.date.startsWith(yr) && !state.closedDays.has(e.date)).map(e=>({ date:e.date, name: e.title + (e.notes?` (${e.notes.toLowerCase()})`:''), kind:'bank_holiday', deducts:false }));
+  if (rows.length) await saveCompanyDays(rows, `${rows.length} bank holidays added for ${yr}`);
+}
+// Upcoming closed days (My Holiday page)
+function companyDaysCardHtml(){
+  const upcoming = state.companyDays.filter(d => d.date >= today() && d.date <= addDays(today(), 365));
+  if (!upcoming.length) return '';
+  return `<div class="card"><div class="card-head"><h3>Bank holidays &amp; shutdown days</h3><span class="small muted">Next 12 months</span></div>
+    <div class="table-wrap"><table><thead><tr><th>Date</th><th>Name</th><th>Type</th></tr></thead><tbody>${
+      upcoming.map(d=>`<tr><td>${dayName(d.date).slice(0,3)} ${fmtDate(d.date)}</td><td>${esc(d.name)}</td><td>${companyDayBadge(d)}</td></tr>`).join('')
+    }</tbody></table></div>
+    <p class="small muted" style="margin-top:8px">These are never counted when you book holiday. Shutdown days marked <em>uses holiday</em> are already included in your Booked total.</p></div>`;
+}
+
+// ═══════════════════════════════════════════════
+// RETURN TO WORK & BRADFORD FACTOR
+// ═══════════════════════════════════════════════
+// A return-to-work (RTW) interview is recorded against each sickness record.
+// Interviews are flagged as due for sickness that ended in the last 60 days.
+// Bradford Factor = S² × D over the last 52 weeks (S = spells, D = days).
+// No trigger/warning levels are applied — the score is for information only.
+const RTW_DUE_WINDOW = 60;
+const RTW_CERT = ['Self-certified','Fit note received','Fit note to follow','Not required'];
+const RTW_FIT = ['Fit for full duties','Fit with adjustments','Phased return'];
+function isRtwDue(l, done){ return l.type==='sickness' && l.status==='approved' && l.end_date < today() && l.end_date >= addDays(today(), -RTW_DUE_WINDOW) && !done.has(l.id); }
+function bradford(empId, leave, asOf = today()){
+  const from = addDays(asOf, -364);
+  const spells = leave.filter(l => l.employee_id===empId && l.type==='sickness' && l.status==='approved' && l.start_date>=from && l.start_date<=asOf);
+  const S = spells.length, D = spells.reduce((a,l)=>a+(Number(l.days)||0), 0);
+  return { S, D, score: S*S*D };
+}
+function rtwCell(l, done){
+  if (done.has(l.id)) return `<button class="btn btn-outline btn-sm" onclick="rtwForm('${l.id}')">View RTW</button>`;
+  if (l.end_date >= today()) return '<span class="small muted">Still off</span>';
+  if (!canManageEmp(l.employee_id)) return '<span class="small muted">—</span>';
+  return `<button class="btn btn-accent btn-sm" onclick="rtwForm('${l.id}')">Return to work</button>${isRtwDue(l, done)?' <span class="badge b-amber">Due</span>':''}`;
+}
+async function rtwDoneSet(){ return new Set((await idbGetAll('rtw')).map(r=>r.leave_id)); }
+// Next working day after a date (skips weekends and closed days)
+function nextWorkingDay(ds){ let d = addDays(ds,1); while (isWeekend(d) || state.closedDays.has(d)) d = addDays(d,1); return d; }
+async function rtwForm(leaveId){
+  const l = await idbGet('leave', leaveId); if (!l) return;
+  const r = await idbGet('rtw', leaveId);
+  const canDo = canManageEmp(l.employee_id), own = l.employee_id===state.user.employee_id;
+  if (!canDo && !own){ toast('Not permitted','error'); return; }
+  if (!r && !canDo){ toast('No return-to-work interview recorded yet','info'); return; }
+  const x = r || { interview_date: today(), returned_date: nextWorkingDay(l.end_date), reason: l.reason||'', certification:'Self-certified', work_related:'No', accident_book:'N/A', fitness:'Fit for full duties', support:'', oh_referral:'No', notes:'', employee_comments:'' };
+  const bf = r?.bradford || bradford(l.employee_id, await idbByIndex('leave','employee_id',l.employee_id));
+  const ro = canDo ? '' : 'disabled';
+  const sel = (id, opts, v) => `<select id="${id}" ${ro}>${optionList(opts, v)}</select>`;
+  openModal(`<h2>Return-to-work interview</h2>
+    <div class="modal-sub">${esc(empName(l.employee_id))} · off sick ${fmtDate(l.start_date)}${l.end_date!==l.start_date?' – '+fmtDate(l.end_date):''} · ${l.days} day${l.days!==1?'s':''}${r?` · completed by ${esc(r.conducted_by)} on ${fmtDate(r.interview_date)}`:''}</div>
+    <form onsubmit="saveRtw(event,'${leaveId}')">
+      ${canDo?`<div class="rtw-bf"><strong>Bradford Factor (last 52 weeks): ${bf.score}</strong> <span class="small muted">· ${bf.S} spell${bf.S!==1?'s':''} × ${bf.D} day${bf.D!==1?'s':''}${r?' · at the time of this interview':''}</span></div>`:''}
+      <div class="form-row">
+        <div class="form-group"><label class="req">Interview date</label><input id="rt-date" type="date" value="${esc(x.interview_date)}" required ${ro}></div>
+        <div class="form-group"><label>Returned to work</label><input id="rt-back" type="date" value="${esc(x.returned_date||'')}" ${ro}></div>
+      </div>
+      <div class="form-group"><label>Reason for absence (as given by the employee)</label><textarea id="rt-reason" rows="2" ${ro}>${esc(x.reason)}</textarea></div>
+      <div class="form-row-3">
+        <div class="form-group"><label>Certification</label>${sel('rt-cert', RTW_CERT, x.certification)}</div>
+        <div class="form-group"><label>Work related?</label>${sel('rt-work', ['No','Yes'], x.work_related)}</div>
+        <div class="form-group"><label>Recorded in accident book?</label>${sel('rt-acc', ['N/A','Yes','No'], x.accident_book)}</div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Fitness to work</label>${sel('rt-fit', RTW_FIT, x.fitness)}</div>
+        <div class="form-group"><label>Occupational health referral?</label>${sel('rt-oh', ['No','Yes'], x.oh_referral)}</div>
+      </div>
+      <div class="form-group"><label>Adjustments or support agreed</label><textarea id="rt-support" rows="2" ${ro}>${esc(x.support)}</textarea></div>
+      <div class="form-group"><label>Manager notes</label><textarea id="rt-notes" rows="2" ${ro}>${esc(x.notes)}</textarea></div>
+      <div class="form-group"><label>Employee comments</label><textarea id="rt-emp" rows="2" ${own?'':'disabled'} placeholder="${own?'Add anything you would like recorded':''}">${esc(x.employee_comments)}</textarea></div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Close</button>${canDo||(own&&r)?`<button type="submit" class="btn btn-primary">${canDo?(r?'Save changes':'Complete interview'):'Save my comments'}</button>`:''}</div>
+    </form>`, true);
+}
+async function saveRtw(ev, leaveId){
+  ev.preventDefault();
+  const l = await idbGet('leave', leaveId); if (!l) return;
+  const existing = await idbGet('rtw', leaveId);
+  const canDo = canManageEmp(l.employee_id), own = l.employee_id===state.user.employee_id;
+  let rec;
+  if (canDo){
+    rec = { ...(existing||{}), leave_id: leaveId, employee_id: l.employee_id,
+      interview_date: val('rt-date'), returned_date: val('rt-back'), reason: val('rt-reason'), certification: val('rt-cert'), work_related: val('rt-work'),
+      accident_book: val('rt-acc'), fitness: val('rt-fit'), oh_referral: val('rt-oh'), support: val('rt-support'), notes: val('rt-notes'),
+      employee_comments: existing?.employee_comments || '',
+      bradford: existing?.bradford || bradford(l.employee_id, await idbByIndex('leave','employee_id',l.employee_id)),
+      conducted_by: existing?.conducted_by || state.user.full_name, created_at: existing?.created_at || nowISO() };
+  } else if (own && existing){
+    rec = { ...existing, employee_comments: val('rt-emp') };
+  } else return;
+  rec.updated_at = nowISO();
+  await idbPut('rtw', rec);
+  await logAction(existing?'rtw_update':'rtw_complete', { employee_id: l.employee_id, detail:`Sickness ${l.start_date} to ${l.end_date}` });
+  closeModal(); toast(existing ? 'Return-to-work saved' : 'Return-to-work interview completed'); refreshLeaveViews();
+}
+// Bradford table for the Sickness page (people in scope with any sickness in the last 52 weeks)
+function bradfordTableHtml(people, leave){
+  const rows = people.map(e => ({ e, ...bradford(e.id, leave) })).filter(r => r.S > 0).sort((a,b)=>b.score-a.score || a.e.last_name.localeCompare(b.e.last_name));
+  window._bradfordRows = rows.map(r=>[r.e.first_name+' '+r.e.last_name, r.e.employee_number||'', r.e.department||'', r.e.site||'', r.S, r.D, r.score]);
+  return `<div class="card"><div class="card-head"><h3>Bradford Factor — last 52 weeks</h3>${rows.length?`<button class="btn btn-outline btn-sm" onclick="downloadCSV('bradford-factor.csv',[['Employee','Number','Department','Site','Spells','Days','Bradford Factor'],...window._bradfordRows])">Export CSV</button>`:''}</div>
+    <p class="small muted" style="margin-bottom:10px">Spells² × days. Shown for information only — no warning levels are applied.</p>
+    ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Department</th><th>Spells</th><th>Days</th><th>Bradford Factor</th></tr></thead><tbody>${
+      rows.map(r=>`<tr class="clickable" onclick="employeeDetail('${r.e.id}')"><td>${esc(r.e.first_name+' '+r.e.last_name)}</td><td>${esc(r.e.department)||'—'}</td><td>${r.S}</td><td>${r.D}</td><td><strong>${r.score}</strong></td></tr>`).join('')
+    }</tbody></table></div>`:'<div class="empty small">No sickness in the last 52 weeks.</div>'}
+  </div>`;
+}
+
+// ═══════════════════════════════════════════════
+// ANNOUNCEMENTS
+// ═══════════════════════════════════════════════
+// Posted by HR to everyone, one site or one department. "New" is anything
+// published since the person last opened the Announcements page.
+function annAudienceLabel(a){
+  if (!a.audience || a.audience==='all') return 'Everyone';
+  const [t, v] = a.audience.split(':');
+  return `${t==='site'?'Site':'Department'}: ${v}`;
+}
+function annVisibleTo(a){
+  if (state.user.role==='hr_admin') return true;
+  if (a.expires && a.expires < today()) return false;
+  if (!a.audience || a.audience==='all') return true;
+  const e = empById(state.user.employee_id); if (!e) return false;
+  const [t, v] = a.audience.split(':');
+  return t==='site' ? e.site===v : e.department===v;
+}
+async function visibleAnnouncements(){
+  return (await idbGetAll('announcements')).filter(annVisibleTo).sort((a,b)=>(!!b.pinned - !!a.pinned) || (b.created_at||'').localeCompare(a.created_at||''));
+}
+function isNewAnnouncement(a){ return state.user.role!=='hr_admin' && (!a.expires || a.expires>=today()) && (a.created_at||'') > (state.user.ann_seen_at||''); }
+function annCardHtml(a, canEdit, isNew){
+  const expired = a.expires && a.expires < today();
+  return `<div class="card ann-card${a.pinned?' pinned':''}${expired?' expired':''}">
+    <div class="card-head" style="margin-bottom:6px"><h3>${a.pinned?'📌 ':''}${esc(a.title)} ${isNew?'<span class="badge b-yellow">New</span>':''}${expired?' <span class="badge b-grey">Expired</span>':''}</h3>
+      ${canEdit?`<div class="doc-btns"><button class="btn btn-outline btn-sm" onclick="annForm('${a.id}')">Edit</button> <button class="btn btn-danger btn-sm" onclick="deleteAnn('${a.id}')">×</button></div>`:''}</div>
+    <div class="small muted" style="margin-bottom:10px">${fmtDate(a.created_at)} · ${esc(annAudienceLabel(a))}${a.expires?` · until ${fmtDate(a.expires)}`:''}</div>
+    <div class="ann-body">${esc(a.body)}</div>
+  </div>`;
+}
+async function renderAnnouncements(c){
+  const isHR = state.user.role==='hr_admin';
+  const list = await visibleAnnouncements();
+  if (isHR) setTopbar(`<button class="btn btn-accent" onclick="annForm()">+ New announcement</button>`);
+  c.innerHTML = list.length ? list.map(a=>annCardHtml(a, isHR, isNewAnnouncement(a))).join('') : `<div class="card"><div class="empty">No announcements yet.${isHR?' Use <strong>New announcement</strong> to post one.':''}</div></div>`;
+  // Opening the board marks everything as read for this person
+  if (!isHR){ state.user.ann_seen_at = nowISO(); await idbPut('users', state.user); }
+}
+// Latest few for the dashboard / My Profile
+async function latestAnnouncementsHtml(){
+  const list = (await visibleAnnouncements()).filter(a => !a.expires || a.expires >= today()).slice(0, 3);
+  if (!list.length) return '';
+  return `<div class="card"><div class="card-head"><h3>Announcements</h3><button class="btn btn-outline btn-sm" onclick="navigate('announcements')">View all</button></div>${
+    list.map(a=>`<div class="ann-mini"><div style="font-weight:600">${a.pinned?'📌 ':''}${esc(a.title)} ${isNewAnnouncement(a)?'<span class="badge b-yellow">New</span>':''}</div><div class="small muted">${fmtDate(a.created_at)} · ${esc(annAudienceLabel(a))}</div><div class="small ann-snip">${esc(a.body.length>220?a.body.slice(0,220)+'…':a.body)}</div></div>`).join('')
+  }</div>`;
+}
+async function annForm(id){
+  const a = id ? await idbGet('announcements', id) : { audience:'all', pinned:false };
+  const aud = a.audience || 'all';
+  openModal(`<h2>${id?'Edit':'New'} announcement</h2>
+    <form onsubmit="saveAnn(event,'${id||''}')">
+      <div class="form-group"><label class="req">Title</label><input id="an-title" value="${esc(a.title||'')}" required></div>
+      <div class="form-group"><label class="req">Message</label><textarea id="an-body" rows="7" required>${esc(a.body||'')}</textarea></div>
+      <div class="form-row">
+        <div class="form-group"><label>Who should see it</label><select id="an-aud">
+          <option value="all" ${aud==='all'?'selected':''}>Everyone</option>
+          <optgroup label="One site">${SITES.map(s=>`<option value="site:${esc(s)}" ${aud==='site:'+s?'selected':''}>${esc(s)}</option>`).join('')}</optgroup>
+          <optgroup label="One department">${DEPARTMENTS.map(d=>`<option value="dept:${esc(d)}" ${aud==='dept:'+d?'selected':''}>${esc(d)}</option>`).join('')}</optgroup>
+        </select></div>
+        <div class="form-group"><label>Show until (optional)</label><input id="an-exp" type="date" value="${esc(a.expires||'')}"></div>
+      </div>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:600"><input type="checkbox" id="an-pin" ${a.pinned?'checked':''}> Pin to the top</label>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">${id?'Save':'Post announcement'}</button></div>
+    </form>`, true);
+}
+async function saveAnn(ev, id){
+  ev.preventDefault();
+  const existing = id ? await idbGet('announcements', id) : null;
+  const rec = { ...(existing||{}), id: id||uuid(), title: val('an-title'), body: document.getElementById('an-body').value.trim(), audience: val('an-aud'), expires: val('an-exp')||null, pinned: document.getElementById('an-pin').checked, author: existing?.author || state.user.username, created_at: existing?.created_at || nowISO(), updated_at: nowISO() };
+  await idbPut('announcements', rec);
+  await logAction(id?'announcement_update':'announcement_post', { detail: rec.title });
+  closeModal(); toast(id?'Announcement saved':'Announcement posted'); navigate('announcements');
+}
+async function deleteAnn(id){
+  const a = await idbGet('announcements', id); if (!a) return;
+  if (!confirm(`Delete "${a.title}"?`)) return;
+  await idbDelete('announcements', id); await logAction('announcement_delete', { detail: a.title });
+  toast('Deleted'); navigate('announcements');
+}
+
+// ═══════════════════════════════════════════════
+// AUDIT TRAIL (HR admin)
+// ═══════════════════════════════════════════════
+const AUDIT_LABELS = {
+  login:'Signed in', logout:'Signed out', login_failed:'Failed sign-in', password_change:'Changed own password', password_reset:'Reset a password',
+  user_create:'Created login account', user_update:'Updated login account', user_delete:'Deleted login account',
+  employee_create:'Added employee', employee_update:'Updated employee', my_details_update:'Updated own contact details',
+  contact_save:'Saved emergency contact', contact_delete:'Deleted emergency contact',
+  leave_create:'Recorded / requested leave', leave_approved:'Approved leave', leave_rejected:'Rejected leave', leave_delete:'Deleted leave', leave_request_cancelled:'Cancelled own leave request', leave_recounted:'Re-counted bookings',
+  holiday_adjustment:'Holiday adjustment', holiday_cancel_requested:'Requested holiday cancellation', holiday_cancel_withdrawn:'Withdrew cancellation request', holiday_cancel_approved:'Approved holiday cancellation', holiday_cancel_declined:'Declined holiday cancellation',
+  company_days_add:'Added closed days', company_day_update:'Changed shutdown day', company_day_delete:'Removed closed day',
+  rtw_complete:'Completed return-to-work', rtw_update:'Updated return-to-work',
+  review_save:'Saved review', objective_save:'Saved objective', objective_delete:'Deleted objective',
+  one_to_one_request:'Requested one-to-one', one_to_one_schedule:'Scheduled one-to-one', one_to_one_run:'Updated one-to-one', one_to_one_own:'Updated own one-to-one', one_to_one_declined:'Declined one-to-one', one_to_one_withdrawn:'Withdrew one-to-one request',
+  job_history_save:'Saved job history', job_history_change:'Recorded role change', job_history_delete:'Deleted job history',
+  document_upload:'Uploaded document', document_update:'Updated document', document_delete:'Deleted document', document_download:'Downloaded document', document_open:'Opened document', document_acknowledged:'Confirmed read & understood',
+  training_create:'Added training record', training_update:'Updated training record', training_delete:'Deleted training record', pay_document_upload:'Uploaded pay document', pay_document_open:'Opened pay document', pay_document_delete:'Deleted pay document', pay_documents_bulk_upload:'Bulk uploaded pay documents',
+  announcement_post:'Posted announcement', announcement_update:'Edited announcement', announcement_delete:'Deleted announcement',
+  task_create:'Created task', task_update:'Updated task', task_complete:'Completed task', task_reopen:'Reopened task', task_delete:'Deleted task',
+  settings_update:'Changed settings', seed:'System set up'
+};
+const auditLabel = a => AUDIT_LABELS[a] || String(a||'').replace(/_/g,' ').replace(/^./, ch=>ch.toUpperCase());
+function auditDetail(r){
+  const parts = [];
+  if (r.changes) parts.push('Changed: '+r.changes);
+  if (r.detail) parts.push(r.detail);
+  if (r.username && r.action!=='login') parts.push('User: '+r.username);
+  if (r.count) parts.push(r.count+' item(s)');
+  if (r.period) parts.push(r.period);
+  return parts.join(' · ');
+}
+async function renderAudit(c){
+  const all = (await idbGetAll('audit_log')).sort((a,b)=>(b.timestamp||'').localeCompare(a.timestamp||''));
+  window._auditAll = all; window._auditShow = 300;
+  const users = [...new Set(all.map(r=>r.user).filter(Boolean))].sort();
+  const actions = [...new Set(all.map(r=>r.action).filter(Boolean))].sort((a,b)=>auditLabel(a).localeCompare(auditLabel(b)));
+  setTopbar(`<button class="btn btn-outline" onclick="exportAudit()">Export CSV</button>`);
+  c.innerHTML = `
+    <div class="toolbar">
+      <input class="grow" id="au-q" placeholder="Search employee, detail…" oninput="filterAudit()">
+      <select id="au-user" onchange="filterAudit()"><option value="">All users</option>${users.map(u=>`<option>${esc(u)}</option>`).join('')}</select>
+      <select id="au-action" onchange="filterAudit()"><option value="">All actions</option>${actions.map(a=>`<option value="${esc(a)}">${esc(auditLabel(a))}</option>`).join('')}</select>
+      <input type="date" id="au-from" onchange="filterAudit()" title="From">
+      <input type="date" id="au-to" onchange="filterAudit()" title="To">
+    </div>
+    <div class="card"><div id="au-count" class="small muted" style="margin-bottom:10px"></div><div id="au-body"></div></div>
+    <p class="small muted">Every sign-in and change made in the system is recorded here. Records can't be edited from this screen.</p>`;
+  filterAudit();
+}
+function auditFiltered(){
+  const q = val('au-q').toLowerCase(), u = val('au-user'), a = val('au-action'), from = val('au-from'), to = val('au-to');
+  return (window._auditAll||[]).filter(r => {
+    if (u && r.user!==u) return false;
+    if (a && r.action!==a) return false;
+    const day = (r.timestamp||'').slice(0,10);
+    if (from && day < from) return false;
+    if (to && day > to) return false;
+    if (q){ const hay = `${r.employee_id?empName(r.employee_id):''} ${auditLabel(r.action)} ${auditDetail(r)} ${r.user||''}`.toLowerCase(); if (!hay.includes(q)) return false; }
+    return true;
+  });
+}
+function filterAudit(more){
+  if (more) window._auditShow += 300; else window._auditShow = 300;
+  const rows = auditFiltered(), shown = rows.slice(0, window._auditShow);
+  document.getElementById('au-count').textContent = `${rows.length} entr${rows.length!==1?'ies':'y'}${rows.length>shown.length?` · showing the latest ${shown.length}`:''}`;
+  const when = ts => { const d = new Date(ts); return isNaN(d) ? '—' : d.toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}); };
+  document.getElementById('au-body').innerHTML = shown.length ? `<div class="table-wrap"><table><thead><tr><th>When</th><th>User</th><th>Action</th><th>Employee</th><th>Details</th></tr></thead><tbody>${
+    shown.map(r=>`<tr><td class="small" style="white-space:nowrap">${when(r.timestamp)}</td><td>${esc(r.user)||'—'}</td><td>${esc(auditLabel(r.action))}</td><td>${r.employee_id?esc(empName(r.employee_id)):'—'}</td><td class="small">${esc(auditDetail(r))||'—'}</td></tr>`).join('')
+  }</tbody></table></div>${rows.length>shown.length?`<div style="text-align:center;margin-top:12px"><button class="btn btn-outline btn-sm" onclick="filterAudit(true)">Show more</button></div>`:''}` : '<div class="empty small">No entries match.</div>';
+}
+function exportAudit(){
+  const rows = [['Date/time','User','Action','Employee','Details']];
+  auditFiltered().forEach(r => rows.push([r.timestamp, r.user||'', auditLabel(r.action), r.employee_id?empName(r.employee_id):'', auditDetail(r)]));
+  downloadCSV('komfort-audit-trail.csv', rows);
+}
+
+// ═══════════════════════════════════════════════
 // REPORTS
 // ═══════════════════════════════════════════════
 async function renderReports(c){
@@ -2903,11 +3428,12 @@ async function saveTask(ev, id){
   const existing = id ? all.find(x=>x.id===id) : null;
   const status = val('tk-status');
   await idbPut('tasks', { id:id||uuid(), title:val('tk-title'), description:val('tk-desc'), assigned_to:val('tk-assign'), related_employee_id:val('tk-emp')||null, due_date:val('tk-due')||null, reminder_date:val('tk-rem')||null, priority:val('tk-pri'), status, created_at:existing?.created_at||nowISO(), completed_at: status==='done'?(existing?.completed_at||nowISO()):null });
+  await logAction(id?'task_update':'task_create', { employee_id: val('tk-emp')||null, detail: val('tk-title') });
   closeModal(); toast('Task saved'); navigate(state.page);
 }
-async function completeTask(id){ const t=(await idbGetAll('tasks')).find(x=>x.id===id); t.status='done'; t.completed_at=nowISO(); await idbPut('tasks',t); toast('Task completed'); navigate(state.page); }
-async function reopenTask(id){ const t=(await idbGetAll('tasks')).find(x=>x.id===id); t.status='open'; t.completed_at=null; await idbPut('tasks',t); navigate(state.page); }
-async function deleteTask(id){ if(!confirm('Delete this task?'))return; await idbDelete('tasks',id); closeModal(); toast('Deleted'); navigate(state.page); }
+async function completeTask(id){ const t=(await idbGetAll('tasks')).find(x=>x.id===id); t.status='done'; t.completed_at=nowISO(); await idbPut('tasks',t); await logAction('task_complete', { detail:t.title }); toast('Task completed'); navigate(state.page); }
+async function reopenTask(id){ const t=(await idbGetAll('tasks')).find(x=>x.id===id); t.status='open'; t.completed_at=null; await idbPut('tasks',t); await logAction('task_reopen', { detail:t.title }); navigate(state.page); }
+async function deleteTask(id){ if(!confirm('Delete this task?'))return; const t=await idbGet('tasks',id); await idbDelete('tasks',id); await logAction('task_delete', { detail:t?.title }); closeModal(); toast('Deleted'); navigate(state.page); }
 
 // ═══════════════════════════════════════════════
 // USER ACCOUNTS (HR admin)
@@ -2962,7 +3488,7 @@ async function resetPwd(id){
   await logAction('password_reset', { username:u.username });
   toast('Password reset');
 }
-async function deleteUser(id){ const u=(await idbGetAll('users')).find(x=>x.id===id); if(u.username==='admin'){toast('Cannot delete admin','error');return;} if(!confirm('Delete this account?'))return; await idbDelete('users',id); await refreshCaches(); toast('Account deleted'); navigate('users'); }
+async function deleteUser(id){ const u=(await idbGetAll('users')).find(x=>x.id===id); if(u.username==='admin'){toast('Cannot delete admin','error');return;} if(!confirm('Delete this account?'))return; await idbDelete('users',id); await logAction('user_delete', { username:u.username }); await refreshCaches(); toast('Account deleted'); navigate('users'); }
 
 // ═══════════════════════════════════════════════
 // SETTINGS
@@ -2986,7 +3512,7 @@ async function renderSettings(c){
       </div>
     </div>`;
 }
-async function saveSettings(){ await setSetting('company_name', val('set-cn')); await setSetting('holiday_year_start', val('set-hys')||'01-01'); toast('Settings saved'); }
+async function saveSettings(){ await setSetting('company_name', val('set-cn')); await setSetting('holiday_year_start', val('set-hys')||'01-01'); await logAction('settings_update', { detail:`Holiday year starts ${val('set-hys')||'01-01'}` }); toast('Settings saved'); }
 async function exportAllData(){
   const dump = {};
   for (const s of STORES) dump[s] = await idbGetAll(s);
@@ -3009,8 +3535,11 @@ async function renderMyProfile(c){
   const contacts = await idbByIndex('contacts','employee_id',id);
   const jobs = await jobsFor(id);
   const ackCard = await myAckCardHtml();
+  // Employees land on My Profile, so show the latest announcements here (managers see them on the dashboard)
+  const annHtml = state.user.role==='employee' ? await latestAnnouncementsHtml() : '';
   c.innerHTML = `
     ${ackCard}
+    ${annHtml}
     <div class="card"><div class="detail-head">${avatarHtml(e,true)}<div class="who"><h2>${e.title?esc(e.title)+' ':''}${esc(e.first_name)} ${esc(e.last_name)}${e.is_director?' <span class="badge b-yellow">Director</span>':''}</h2><div class="muted">${esc(e.job_title)} · ${esc(e.department)} · ${esc(e.site)}</div><div class="small muted">${esc(e.employee_number)} · Started ${fmtDate(e.start_date)} (${serviceYM(e.start_date)})${e.manager_id?` · Manager: ${esc(empName(e.manager_id))}`:''}</div></div></div></div>
     <div class="card"><div class="card-head"><h3>My details</h3><button class="btn btn-outline btn-sm" onclick="myDetailsForm()">Update contact details</button></div>
       <dl class="kv">
@@ -3022,7 +3551,7 @@ async function renderMyProfile(c){
         <dt>Work email</dt><dd>${esc(e.work_email)||'—'}</dd>
         <dt>Work phone</dt><dd>${phoneLink(e.work_phone)}</dd>
         <dt>Work mobile</dt><dd>${phoneLink(e.work_mobile)}</dd>
-        <dt>Salary</dt><dd>${fmtMoney(e.salary)} (${esc(e.pay_frequency)})</dd>
+        <dt>Salary</dt><dd>${revealHtml(`${fmtMoney(e.salary)} (${esc(e.pay_frequency)})`)}</dd>
       </dl>
     </div>
     <div class="card"><div class="card-head"><h3>My job history</h3></div>${jobHistoryTable(e, jobs, false)}</div>
@@ -3052,7 +3581,7 @@ async function saveMyDetails(ev){
   ev.preventDefault();
   const e = empById(state.user.employee_id);
   e.address_line1=val('md-a1'); e.address_line2=val('md-a2'); e.city=val('md-city'); e.postcode=val('md-pc'); e.mobile_phone=val('md-mob'); e.personal_email=val('md-pe'); e.updated_at=nowISO();
-  await idbPut('employees', e); await refreshCaches();
+  await idbPut('employees', e); await logAction('my_details_update', { employee_id:e.id }); await refreshCaches();
   closeModal(); toast('Details updated'); navigate('my-profile');
 }
 function myContactForm(){
@@ -3068,9 +3597,10 @@ function myContactForm(){
 async function saveMyContact(ev){
   ev.preventDefault();
   await idbPut('contacts', { id:uuid(), employee_id:state.user.employee_id, name:val('mc-name'), relationship:val('mc-rel'), phone:val('mc-phone'), email:val('mc-email'), address:val('mc-addr') });
+  await logAction('contact_save', { employee_id:state.user.employee_id, detail:val('mc-name') });
   closeModal(); toast('Contact added'); navigate('my-profile');
 }
-async function deleteMyContact(id){ if(!confirm('Delete this contact?'))return; await idbDelete('contacts',id); toast('Deleted'); navigate('my-profile'); }
+async function deleteMyContact(id){ if(!confirm('Delete this contact?'))return; await idbDelete('contacts',id); await logAction('contact_delete', { employee_id:state.user.employee_id }); toast('Deleted'); navigate('my-profile'); }
 
 async function renderMyLeave(c){
   const id = state.user.employee_id;
@@ -3091,6 +3621,7 @@ async function renderMyLeave(c){
       }</tbody></table></div>`:'<div class="empty small">No holiday booked yet.</div>'}
       <p class="small muted" style="margin-top:10px">Need to cancel an approved holiday that hasn't started yet? Use <strong>Request cancellation</strong> — it goes to your manager for approval, and the holiday stays booked until they approve it.</p>
     </div>
+    ${companyDaysCardHtml()}
     ${adjustments.length?`<div class="card"><div class="card-head"><h3>Holiday adjustments</h3></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Change</th><th>Note</th></tr></thead><tbody>${
       adjustments.map(a=>`<tr><td>${fmtDate(a.start_date)}</td><td><strong>${a.days>=0?'+':''}${a.days} day${Math.abs(a.days)!==1?'s':''}</strong></td><td class="small">${esc(a.reason)||'—'}</td></tr>`).join('')
     }</tbody></table></div></div>`:''}`;
@@ -3102,14 +3633,15 @@ async function renderMySickness(c){
   const sickness = (await idbByIndex('leave','employee_id',id)).filter(l=>l.type==='sickness').sort((a,b)=>b.start_date.localeCompare(a.start_date));
   const thisYr = sickness.filter(l=>l.start_date>=bounds.start && l.start_date<=bounds.end);
   const totalDays = thisYr.reduce((a,l)=>a+l.days,0);
+  const done = await rtwDoneSet();
   c.innerHTML = `
     <div class="stat-grid">
       <div class="stat ${totalDays>0?'warn':'ok'}"><div class="num">${totalDays}</div><div class="lbl">Sick days (${bounds.label})</div></div>
       <div class="stat"><div class="num">${thisYr.length}</div><div class="lbl">Episodes (${bounds.label})</div></div>
     </div>
     <div class="card"><div class="card-head"><h3>My sickness</h3></div>
-      ${sickness.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Reason / notes</th></tr></thead><tbody>${
-        sickness.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td></tr>`).join('')
+      ${sickness.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Reason / notes</th><th>Return to work</th></tr></thead><tbody>${
+        sickness.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td><td>${done.has(l.id)?`<button class="btn btn-outline btn-sm" onclick="rtwForm('${l.id}')">View</button>`:'<span class="small muted">—</span>'}</td></tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">No sickness recorded. Sickness is logged by HR or your manager.</div>'}
     </div>`;
 }
@@ -3125,7 +3657,7 @@ async function renderMyOther(c){
       }</tbody></table></div>`:'<div class="empty small">No other absences recorded.</div>'}
     </div>`;
 }
-async function cancelMyLeave(id){ if(!confirm('Cancel this request?'))return; const l=(await idbGetAll('leave')).find(x=>x.id===id); l.status='cancelled'; await idbPut('leave',l); toast('Request cancelled'); navigate('my-leave'); }
+async function cancelMyLeave(id){ if(!confirm('Cancel this request?'))return; const l=(await idbGetAll('leave')).find(x=>x.id===id); l.status='cancelled'; await idbPut('leave',l); await logAction('leave_request_cancelled', { employee_id:l.employee_id, detail:`${leaveLabel(l.type)} ${l.start_date} to ${l.end_date}` }); toast('Request cancelled'); navigate('my-leave'); }
 
 async function renderMyPerformance(c){
   const id = state.user.employee_id;
@@ -3164,6 +3696,7 @@ async function saveMyPassword(ev){
   if (val('pw-new') !== val('pw-conf')){ toast('New passwords do not match','error'); return; }
   state.user.password_hash = await sha256(val('pw-new')); state.user.must_change_password=false;
   await idbPut('users', state.user);
+  await logAction('password_change');
   closeModal(); toast('Password changed');
 }
 

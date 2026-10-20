@@ -99,6 +99,7 @@ function initializeSchema() {
       employee_id TEXT REFERENCES employees(id),
       full_name TEXT NOT NULL,
       must_change_password INTEGER DEFAULT 0,
+      ann_seen_at TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     )
   `);
@@ -174,6 +175,54 @@ function initializeSchema() {
       decided_by TEXT,
       decided_at TEXT,
       completed_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
+    )
+  `);
+  // Company-wide closed days. Bank holidays are on top of allowance; shutdown
+  // days either come out of allowance (deducts = 1) or are free.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS company_days (
+      id TEXT PRIMARY KEY,
+      date TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('bank_holiday','shutdown')),
+      deducts INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS return_to_work (
+      leave_id TEXT PRIMARY KEY REFERENCES leave(id),
+      employee_id TEXT NOT NULL REFERENCES employees(id),
+      interview_date TEXT,
+      returned_date TEXT,
+      reason TEXT,
+      certification TEXT,
+      work_related TEXT,
+      accident_book TEXT,
+      fitness TEXT,
+      oh_referral TEXT,
+      support TEXT,
+      notes TEXT,
+      employee_comments TEXT,
+      bradford_spells INTEGER,
+      bradford_days REAL,
+      bradford_score REAL,
+      conducted_by TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
+    )
+  `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS announcements (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      body TEXT,
+      audience TEXT DEFAULT 'all',
+      pinned INTEGER DEFAULT 0,
+      expires TEXT,
+      author TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT
     )
