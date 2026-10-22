@@ -979,13 +979,16 @@ function deductingShutdownDays(e, bounds){
 async function holidayYearBounds(ref){
   const mmdd = await getSetting('holiday_year_start','01-01');
   const [mm,dd] = mmdd.split('-').map(Number);
-  const r = ref?new Date(ref):new Date();
-  let startYear = r.getFullYear();
-  const boundary = new Date(startYear, mm-1, dd);
-  if (r < boundary) startYear -= 1;
-  const start = new Date(startYear, mm-1, dd);
-  const end = new Date(startYear+1, mm-1, dd); end.setDate(end.getDate()-1);
-  return { start: start.toISOString().slice(0,10), end: end.toISOString().slice(0,10), label:`${startYear}/${String((startYear+1)).slice(2)}` };
+  const pad = n => String(n).padStart(2,'0');
+  // Work in YYYY-MM-DD strings so summer time can't shift the dates by a day
+  const refDay = ref ? String(ref).slice(0,10) : today();
+  let startYear = Number(refDay.slice(0,4));
+  if (refDay < `${startYear}-${pad(mm)}-${pad(dd)}`) startYear -= 1;
+  const start = `${startYear}-${pad(mm)}-${pad(dd)}`;
+  const end = addDays(`${startYear+1}-${pad(mm)}-${pad(dd)}`, -1);
+  // A 1 January start is a calendar year ("2026"); anything else spans two ("2026/27")
+  const label = mm===1 && dd===1 ? String(startYear) : `${startYear}/${String(startYear+1).slice(2)}`;
+  return { start, end, label };
 }
 
 async function leaveBalance(employeeId){
