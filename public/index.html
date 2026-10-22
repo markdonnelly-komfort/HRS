@@ -1050,8 +1050,9 @@ async function holidayYearPicker(empId){
     if (!opts.some(o=>o.start===b.start)) opts.push(b);
   }
   const chosen = await holidayYearBounds(window._holYear || undefined);
-  return { bounds: chosen, html: `<div class="toolbar" style="margin-bottom:12px"><label class="small" style="font-weight:600">Holiday year</label><select onchange="setHolidayYear(this.value)">${
-    opts.map(o=>`<option value="${o.start}" ${o.start===chosen.start?'selected':''}>${esc(o.label)}${o.start===cur.start?' (current)':''}</option>`).join('')}</select></div>` };
+  // Oldest on the left, so the years read in order
+  return { bounds: chosen, html: `<div class="pill-tabs" style="align-items:center;margin-bottom:12px"><span class="small" style="font-weight:600;margin-right:4px">Holiday year</span>${
+    opts.slice().reverse().map(o=>`<div class="pill ${o.start===chosen.start?'active':''}" onclick="setHolidayYear('${o.start}')" title="${o.start===cur.start?'Current holiday year':''}">${esc(o.label)}${o.start===cur.start?' · current':''}</div>`).join('')}</div>` };
 }
 function setHolidayYear(start){ window._holYear = start; refreshLeaveViews(); }
 // Drill-down list for a holiday balance tile
