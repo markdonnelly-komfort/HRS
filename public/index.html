@@ -791,6 +791,7 @@ async function buildNav(){
   const nav = document.getElementById('nav');
   const items = state.leaver ? NAV.leaver : (NAV[state.user.role] || []);
   const badges = await computeBadges();
+  if (!state.user) return;   // signed out while the badges were loading
   nav.innerHTML = items.map(i => `
     <div class="nav-item" data-page="${i.id}" onclick="navigate('${i.id}')">
       <span class="ic">${i.ic}</span><span>${i.label}</span>
@@ -798,7 +799,13 @@ async function buildNav(){
     </div>`).join('');
 }
 
+// Badges are worked out over several reads; if the person signs out part-way
+// through, state.user becomes null — give up quietly rather than throw.
 async function computeBadges(){
+  if (!state.user) return {};
+  try { return await computeBadgesFor(); } catch(e){ if (!state.user) return {}; throw e; }
+}
+async function computeBadgesFor(){
   const leave = await idbGetAll('leave');
   const tasks = await idbGetAll('tasks');
   let pending = leave.filter(l => l.status === 'pending');
@@ -861,6 +868,7 @@ async function navigate(page){
   document.getElementById('topbar-actions').innerHTML = '';
   document.getElementById('sidebar').classList.remove('open');
   await refreshCaches();
+  if (!state.user) return;   // signed out while loading
   const mgr = state.user.role==='manager';
   const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', 'leave-holiday':mgr?'Team Holiday':'Holiday', 'leave-sickness':mgr?'Team Sickness':'Sickness', 'leave-other':mgr?'Team Absences':'Other Absences', performance:mgr?'Team Performance':'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: mgr?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-sickness':'My Sickness', 'my-other':'My Other Absences', 'my-performance':'My Performance', training: mgr?'Team Training':'Training', 'my-training':'My Training', 'my-payslips':'My Payslips', 'payslip-uploads':'Payslip Uploads', 'org-chart':'Organisation Chart', calendar:'Holiday Calendar', announcements:'Announcements', 'company-days':'Bank Holidays & Shutdowns', audit:'Audit Trail', signatures:'E-signatures', 'my-signatures':'Documents to Sign', assets:'Assets & Equipment' };
   document.getElementById('page-title').textContent = titles[page] || page;
@@ -899,8 +907,8 @@ async function navigate(page){
       case 'assets': if (state.user.role!=='hr_admin') throw new Error('Not permitted'); await renderAssets(c); break;
       default: c.innerHTML = '<div class="empty">Page not found</div>';
     }
-  } catch(err){ console.error(err); c.innerHTML = `<div class="empty">Error: ${err.message}</div>`; }
-  buildNav();
+  } catch(err){ if (!state.user) return; console.error(err); c.innerHTML = `<div class="empty">Error: ${err.message}</div>`; }
+  if (state.user) buildNav();
 }
 function toggleSidebar(){ document.getElementById('sidebar').classList.toggle('open'); }
 function setTopbar(html){ document.getElementById('topbar-actions').innerHTML = html; }
