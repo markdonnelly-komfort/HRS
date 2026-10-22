@@ -1156,6 +1156,13 @@ async function renderDashboard(c){
       <div class="stat clickable" onclick="openDashList('tasks')"><div class="num">${myTasks.length}</div><div class="lbl">Open tasks</div></div>
     </div>
 
+    ${isMgr?`<div class="card">
+      <div class="card-head"><h3>Team holiday — next 30 days (${teamHols.length})</h3><button class="btn btn-outline btn-sm" onclick="navigate('calendar')">Holiday Calendar</button></div>
+      ${teamHols.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>When</th></tr></thead><tbody>${
+        teamHols.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${l.status==='pending'?'<span class="badge b-amber">Awaiting approval</span>':'<span class="badge b-green">Booked</span>'}</td><td class="small">${whenText(l)}</td></tr>`).join('')
+      }</tbody></table></div>`:'<div class="empty small">No team holiday in the next 30 days.</div>'}
+    </div>`:''}
+
     ${probDue.length?`<div class="card">
       <div class="card-head"><h3>Probation reviews due</h3><span class="small muted">Next 45 days${isMgr?'':' · all sites'}</span></div>
       <div class="table-wrap"><table><thead><tr><th>Employee</th><th>Job title</th><th>Manager</th><th>Probation ends</th><th></th></tr></thead><tbody>${
@@ -1194,12 +1201,6 @@ async function renderDashboard(c){
       }</tbody></table></div>
     </div>`:''}
 
-    ${isMgr?`<div class="card">
-      <div class="card-head"><h3>Team holiday — next 30 days (${teamHols.length})</h3><button class="btn btn-outline btn-sm" onclick="navigate('calendar')">Holiday Calendar</button></div>
-      ${teamHols.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>When</th></tr></thead><tbody>${
-        teamHols.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${l.status==='pending'?'<span class="badge b-amber">Awaiting approval</span>':'<span class="badge b-green">Booked</span>'}</td><td class="small">${whenText(l)}</td></tr>`).join('')
-      }</tbody></table></div>`:'<div class="empty small">No team holiday in the next 30 days.</div>'}
-    </div>`:''}
 
     <div class="form-row">
       <div class="card">
