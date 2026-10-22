@@ -228,6 +228,7 @@ function initializeSchema() {
       file_path TEXT,
       file_hash TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','signed','declined','cancelled')),
+      signers TEXT,          -- JSON: ordered [{role: employee|manager|hr, employee_id, status, name, signed_at, method, user, viewed_at, signer_ip}]
       sent_by TEXT,
       sent_at TEXT DEFAULT (datetime('now')),
       viewed_at TEXT,
