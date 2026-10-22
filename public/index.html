@@ -181,6 +181,11 @@
     .doc-row { flex-wrap: wrap; }
     .doc-row .doc-btns { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
     .ack-banner { border-left: 5px solid var(--accent); background: #fffbea; }
+    .sig-frame { width: 100%; height: 420px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+    .sig-pad { display: block; width: 100%; height: 150px; border: 2px dashed #c8ccd0; border-radius: 8px; background: #fff; touch-action: none; cursor: crosshair; }
+    .sig-people { max-height: 220px; overflow-y: auto; border: 2px solid var(--border); border-radius: 8px; padding: 6px 10px; }
+    .sig-person { display: flex; gap: 8px; align-items: center; padding: 5px 0; font-weight: 400 !important; cursor: pointer; }
+    @media (max-width: 600px){ .sig-frame { height: 300px; } }
     .reveal .reveal-val { display: none; cursor: pointer; }
     .reveal.shown .reveal-val { display: inline; }
     .reveal.shown .btn { display: none; }
@@ -334,8 +339,9 @@ const DB_NAME = 'KomfortHR';
 // v5: training records + uploaded pay documents (payslips / P60 / P11D).
 // v6: job history, one-to-ones, policy read-and-understood confirmations.
 // v7: bank holidays / shutdown days, return-to-work interviews, announcements.
-const DB_VERSION = 7;
-const STORES = ['users','employees','contacts','documents','leave','reviews','objectives','tasks','audit_log','settings','training','pay_documents','jobs','one_to_ones','doc_acks','company_days','rtw','announcements'];
+// v8: e-signature requests.
+const DB_VERSION = 8;
+const STORES = ['users','employees','contacts','documents','leave','reviews','objectives','tasks','audit_log','settings','training','pay_documents','jobs','one_to_ones','doc_acks','company_days','rtw','announcements','sign_requests'];
 let db = null;
 
 function openDB() {
@@ -425,6 +431,11 @@ function openDB() {
       }
       if (!d.objectStoreNames.contains('announcements')) {
         d.createObjectStore('announcements', { keyPath: 'id' });
+      }
+      if (!d.objectStoreNames.contains('sign_requests')) {
+        const s = d.createObjectStore('sign_requests', { keyPath: 'id' });
+        s.createIndex('employee_id', 'employee_id');
+        s.createIndex('status', 'status');
       }
       // Drop payroll stores from any browser that ran the removed payroll build.
       ['pay_components','pay_runs','payslips','recurring_deductions'].forEach(s => {
@@ -552,6 +563,10 @@ async function seedDefaults(){
   // Sample announcement
   await idbPut('announcements', { id:uuid(), title:'Christmas shutdown dates', body:'The factory and offices close from Thursday 24 December and reopen on Monday 4 January.\n\n24 December is a free day. 29, 30 and 31 December come out of your holiday allowance, so please keep 3 days back.', audience:'all', pinned:true, expires:null, author:'admin', created_at:nowISO(), updated_at:nowISO() });
 
+  // Sample document waiting for James's e-signature
+  const demoPdf = makeDemoPdf('Contract variation - change of hours', ['Employee: James Okafor (KP-014)', 'From 1 January your contracted hours change from 39 to 37.5 per week.', 'All other terms of your contract stay the same.', '', 'Signed for Komfort Partitioning Ltd: HR Department']);
+  await idbPut('sign_requests', { id:uuid(), employee_id:empId, title:'Contract variation - change of hours', message:'Please read and sign by the end of the month.', due_date:addDays(today(),10), category:'contract', file:{ data:demoPdf, filename:'contract-variation-james-okafor.pdf', mime_type:'application/pdf' }, file_hash: await sha256Bytes(dataURLtoBytes(demoPdf)), status:'pending', sent_by:'admin', sent_by_name:'System Administrator', sent_at:nowISO() });
+
   // Sample leave
   await idbPut('leave', { id:uuid(), employee_id:empId, type:'holiday', start_date:thisYear()+'-08-04', end_date:thisYear()+'-08-08', days:5, half_day:false, status:'approved', reason:'Summer holiday', requested_at:nowISO(), decided_by:'manager', decided_at:nowISO(), decision_note:'' });
   await idbPut('leave', { id:uuid(), employee_id:empId, type:'holiday', start_date:thisYear()+'-12-22', end_date:thisYear()+'-12-23', days:2, half_day:false, status:'pending', reason:'Christmas', requested_at:nowISO(), decided_by:null, decided_at:null, decision_note:'' });
@@ -673,6 +688,7 @@ const NAV = {
     { id:'performance',   label:'Performance',      ic:'★', badge:'oneToOneRequests' },
     { id:'training',      label:'Training',         ic:'✪', badge:'trainingDue' },
     { id:'documents',     label:'Documents',        ic:'▤' },
+    { id:'signatures',    label:'E-signatures',     ic:'✍', badge:'sigAwaiting' },
     { id:'payslip-uploads',label:'Payslip Uploads', ic:'£' },
     { id:'reports',       label:'Reports',          ic:'▣' },
     { id:'tasks',         label:'HR Tasks',         ic:'✔', badge:'openTasks' },
@@ -699,6 +715,7 @@ const NAV = {
     { id:'my-payslips',   label:'My Payslips',      ic:'£', badge:'newPayDocs' },
     { id:'org-chart',     label:'Organisation Chart',ic:'☷' },
     { id:'documents',     label:'Documents',        ic:'▤', badge:'docsToAck' },
+    { id:'my-signatures', label:'Documents to Sign',ic:'✍', badge:'docsToSign' },
     { id:'tasks',         label:'My Tasks',         ic:'✔', badge:'openTasks' }
   ],
   employee: [
@@ -712,7 +729,8 @@ const NAV = {
     { id:'my-training',   label:'My Training',      ic:'✪' },
     { id:'my-payslips',   label:'My Payslips',      ic:'£', badge:'newPayDocs' },
     { id:'org-chart',     label:'Organisation Chart',ic:'☷' },
-    { id:'documents',     label:'Company Documents',ic:'▤', badge:'docsToAck' }
+    { id:'documents',     label:'Company Documents',ic:'▤', badge:'docsToAck' },
+    { id:'my-signatures', label:'Documents to Sign',ic:'✍', badge:'docsToSign' }
   ]
 };
 
@@ -757,10 +775,13 @@ async function computeBadges(){
   const rtwDueN = rtwDone ? leave.filter(l => isRtwDue(l, rtwDone) && canManageEmp(l.employee_id)).length : 0;
   // Announcements published since this user last opened the board
   const newAnnouncements = (await visibleAnnouncements()).filter(a => isNewAnnouncement(a)).length;
+  // E-signatures: documents waiting for this person / all outstanding (HR)
+  const docsToSign = state.user.employee_id ? (await idbByIndex('sign_requests','employee_id',state.user.employee_id)).filter(r=>r.status==='pending').length : 0;
+  const sigAwaiting = state.user.role==='hr_admin' ? (await idbByIndex('sign_requests','status','pending')).length : 0;
   return {
     pendingHoliday: pending.filter(l=>l.type==='holiday').length + (state.user.role==='employee' ? 0 : leave.filter(l=>isCancelRequest(l) && canDecideCancel(l)).length),
     sicknessActions: pending.filter(l=>l.type==='sickness').length + rtwDueN,
-    newAnnouncements,
+    newAnnouncements, docsToSign, sigAwaiting,
     pendingOther: pending.filter(l=>OTHER_ABSENCE.includes(l.type)).length,
     openTasks: openTasks.length,
     trainingDue, newPayDocs, oneToOneRequests, docsToAck
@@ -785,7 +806,7 @@ async function navigate(page){
   document.getElementById('sidebar').classList.remove('open');
   await refreshCaches();
   const mgr = state.user.role==='manager';
-  const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', 'leave-holiday':mgr?'Team Holiday':'Holiday', 'leave-sickness':mgr?'Team Sickness':'Sickness', 'leave-other':mgr?'Team Absences':'Other Absences', performance:mgr?'Team Performance':'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: mgr?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-sickness':'My Sickness', 'my-other':'My Other Absences', 'my-performance':'My Performance', training: mgr?'Team Training':'Training', 'my-training':'My Training', 'my-payslips':'My Payslips', 'payslip-uploads':'Payslip Uploads', 'org-chart':'Organisation Chart', calendar:'Holiday Calendar', announcements:'Announcements', 'company-days':'Bank Holidays & Shutdowns', audit:'Audit Trail' };
+  const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', 'leave-holiday':mgr?'Team Holiday':'Holiday', 'leave-sickness':mgr?'Team Sickness':'Sickness', 'leave-other':mgr?'Team Absences':'Other Absences', performance:mgr?'Team Performance':'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: mgr?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-sickness':'My Sickness', 'my-other':'My Other Absences', 'my-performance':'My Performance', training: mgr?'Team Training':'Training', 'my-training':'My Training', 'my-payslips':'My Payslips', 'payslip-uploads':'Payslip Uploads', 'org-chart':'Organisation Chart', calendar:'Holiday Calendar', announcements:'Announcements', 'company-days':'Bank Holidays & Shutdowns', audit:'Audit Trail', signatures:'E-signatures', 'my-signatures':'Documents to Sign' };
   document.getElementById('page-title').textContent = titles[page] || page;
   const c = document.getElementById('content');
   c.innerHTML = '<div class="empty">Loading…</div>';
@@ -817,6 +838,8 @@ async function navigate(page){
       case 'announcements': await renderAnnouncements(c); break;
       case 'company-days': if (state.user.role!=='hr_admin') throw new Error('Not permitted'); await renderCompanyDays(c); break;
       case 'audit': if (state.user.role!=='hr_admin') throw new Error('Not permitted'); await renderAudit(c); break;
+      case 'signatures': if (state.user.role!=='hr_admin') throw new Error('Not permitted'); await renderSignatures(c); break;
+      case 'my-signatures': await renderMySignatures(c); break;
       default: c.innerHTML = '<div class="empty">Page not found</div>';
     }
   } catch(err){ console.error(err); c.innerHTML = `<div class="empty">Error: ${err.message}</div>`; }
@@ -986,7 +1009,7 @@ async function renderDashboard(c){
   const tracked = await trackedDocs();
   const ackC = tracked.length ? await ackCounts(tracked) : {};
   const ackOutstanding = tracked.filter(d => ackC[d.id].done < ackC[d.id].total);
-  const myAcks = await myAckCardHtml();
+  const myAcks = (await mySignCardHtml()) + (await myAckCardHtml());
   const rtwDone = await rtwDoneSet();
   const rtwDue = leave.filter(l => isRtwDue(l, rtwDone) && canManageEmp(l.employee_id));
   const closedToday = state.companyDays.find(d => d.date===today());
@@ -1357,6 +1380,11 @@ async function empTabDocuments(body, id){
   body.innerHTML = `<div class="card"><div class="card-head"><h3>Employee documents</h3>${canEdit?`<button class="btn btn-accent btn-sm" onclick="documentForm('${id}')">+ Upload document</button>`:''}</div>
     ${docs.length?docs.map(d=>docRow(d, canEdit)).join(''):'<div class="empty small">No documents (contracts, reference letters, etc.) uploaded.</div>'}
   </div>`;
+  // E-signature requests (HR only)
+  if (canEdit){
+    const sigs = (await idbByIndex('sign_requests','employee_id',id)).sort((a,b)=>(b.sent_at||'').localeCompare(a.sent_at||''));
+    body.insertAdjacentHTML('beforeend', `<div class="card"><div class="card-head"><h3>E-signatures</h3><button class="btn btn-accent btn-sm" onclick="sendSignForm('${id}')">+ Send for signature</button></div>${sigTable(sigs, false, 'No documents sent for signature.')}</div>`);
+  }
   // Read-and-understood status for this person
   const tracked = await trackedDocs();
   if (!tracked.length) return;
@@ -3223,6 +3251,305 @@ async function deleteAnn(id){
 }
 
 // ═══════════════════════════════════════════════
+// E-SIGNATURES
+// ═══════════════════════════════════════════════
+// HR sends a PDF to one or more employees; each person signs their own copy
+// in the browser (drawn or typed signature + consent tick). The signed PDF
+// gets a footer on every page plus a signature certificate page (who, when,
+// how, and the SHA-256 fingerprint of the original), and is filed in the
+// employee's documents. PDF tools (pdf-lib) load only when needed.
+const PDF_LIB_URL = 'https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js';
+const SIGN_CONSENT = 'I have read this document and agree that my electronic signature is the legal equivalent of my handwritten signature.';
+let _pdfLibLoading = null;
+function loadPdfLib(){
+  if (window.PDFLib) return Promise.resolve(window.PDFLib);
+  return _pdfLibLoading ||= new Promise((res, rej) => {
+    const s = document.createElement('script'); s.src = PDF_LIB_URL;
+    s.onload = () => res(window.PDFLib);
+    s.onerror = () => { _pdfLibLoading = null; s.remove(); rej(new Error('Could not load the PDF tools — check your internet connection and try again')); };
+    document.head.appendChild(s);
+  });
+}
+async function sha256Bytes(bytes){ return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(b=>b.toString(16).padStart(2,'0')).join(''); }
+function dataURLtoBytes(dataUrl){ const bin = atob(dataUrl.split(',')[1]); const a = new Uint8Array(bin.length); for (let i=0;i<bin.length;i++) a[i] = bin.charCodeAt(i); return a; }
+function bytesToDataURL(bytes, mime){ let s = ''; for (let i=0;i<bytes.length;i+=0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i+0x8000)); return `data:${mime};base64,${btoa(s)}`; }
+const fmtDateTime = iso => iso ? new Date(iso).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+function sigStatusBadge(r){
+  if (r.status==='pending') return r.due_date && r.due_date < today() ? `<span class="badge b-red">Overdue · due ${fmtDate(r.due_date)}</span>` : `<span class="badge b-amber">Awaiting signature${r.due_date?' · by '+fmtDate(r.due_date):''}</span>`;
+  return ({ signed:`<span class="badge b-green">Signed · ${fmtDate(r.signed_at)}</span>`, declined:'<span class="badge b-red">Declined</span>', cancelled:'<span class="badge b-grey">Cancelled</span>' })[r.status] || esc(r.status);
+}
+// Simple one-page PDF used for the demo data (real documents are uploaded by HR)
+function makeDemoPdf(title, lines){
+  const q = s => s.replace(/[\\()]/g, m => '\\'+m);
+  let y = 780, content = `BT /F1 18 Tf 60 ${y} Td (${q(title)}) Tj ET`;
+  lines.forEach(l => { y -= 22; content += `\nBT /F1 11 Tf 60 ${y} Td (${q(l)}) Tj ET`; });
+  const objs = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', `<< /Length ${content.length} >>\nstream\n${content}\nendstream`];
+  let pdf = '%PDF-1.4\n'; const offs = [];
+  objs.forEach((o,i) => { offs.push(pdf.length); pdf += `${i+1} 0 obj\n${o}\nendobj\n`; });
+  const xref = pdf.length;
+  pdf += `xref\n0 ${objs.length+1}\n0000000000 65535 f \n` + offs.map(o=>String(o).padStart(10,'0')+' 00000 n \n').join('') + `trailer\n<< /Size ${objs.length+1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return 'data:application/pdf;base64,' + btoa(pdf);
+}
+
+// ── HR: send and track ──
+async function renderSignatures(c){
+  const all = (await idbGetAll('sign_requests')).sort((a,b)=>(b.sent_at||'').localeCompare(a.sent_at||''));
+  window._sigAll = all;
+  const pending = all.filter(r=>r.status==='pending');
+  setTopbar(`<button class="btn btn-accent" onclick="sendSignForm()">+ Send for signature</button>`);
+  c.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat warn"><div class="num">${pending.length}</div><div class="lbl">Awaiting signature</div></div>
+      <div class="stat ${pending.some(r=>r.due_date&&r.due_date<today())?'warn':'ok'}"><div class="num">${pending.filter(r=>r.due_date&&r.due_date<today()).length}</div><div class="lbl">Overdue</div></div>
+      <div class="stat ok"><div class="num">${all.filter(r=>r.status==='signed').length}</div><div class="lbl">Signed</div></div>
+      <div class="stat"><div class="num">${all.filter(r=>r.status==='declined').length}</div><div class="lbl">Declined</div></div>
+    </div>
+    <div class="pill-tabs" id="sig-pills">${[['pending','Awaiting'],['signed','Signed'],['declined','Declined'],['cancelled','Cancelled'],['','All']].map(([v,t],i)=>`<div class="pill ${i===0?'active':''}" onclick="filterSigs('${v}',this)">${t} (${v?all.filter(r=>r.status===v).length:all.length})</div>`).join('')}</div>
+    <div class="card" id="sig-list"></div>
+    <p class="small muted">Only PDFs can be sent for signature. Each person signs their own copy; the signed PDF includes a signature certificate page and is saved to their documents automatically.</p>`;
+  filterSigs('pending', document.querySelector('#sig-pills .pill'));
+}
+function filterSigs(status, el){
+  document.querySelectorAll('#sig-pills .pill').forEach(p=>p.classList.remove('active')); el.classList.add('active');
+  const list = (window._sigAll||[]).filter(r=>!status || r.status===status);
+  document.getElementById('sig-list').innerHTML = sigTable(list, true, 'Nothing here.');
+}
+function sigTable(list, showEmp, empty){
+  if (!list.length) return `<div class="empty small">${empty}</div>`;
+  const isHR = state.user.role==='hr_admin';
+  return `<div class="table-wrap"><table><thead><tr>${showEmp?'<th>Employee</th>':''}<th>Document</th><th>Sent</th><th>Status</th><th></th></tr></thead><tbody>${
+    list.map(r=>`<tr>${showEmp?`<td>${esc(empName(r.employee_id))}</td>`:''}<td><strong>${esc(r.title)}</strong>${r.status==='declined'&&r.declined_reason?`<div class="small muted">Reason: ${esc(r.declined_reason)}</div>`:''}</td><td class="small">${fmtDate(r.sent_at)}</td><td>${sigStatusBadge(r)}</td><td style="text-align:right;white-space:nowrap">${
+      (r.status==='signed' ? `<button class="btn btn-outline btn-sm" onclick="openSignFile('${r.id}','signed')">Signed copy</button> ` : '')
+      + (isHR ? `<button class="btn btn-outline btn-sm" onclick="openSignFile('${r.id}','original')">Original</button>` : '')
+      + (isHR && r.status==='pending' ? ` <button class="btn btn-danger btn-sm" onclick="cancelSign('${r.id}')">Cancel</button>` : '')
+      + (!isHR && r.status==='pending' && r.employee_id===state.user.employee_id ? `<button class="btn btn-accent btn-sm" onclick="signForm('${r.id}')">Review &amp; sign</button>` : '')
+    }</td></tr>`).join('')
+  }</tbody></table></div>`;
+}
+function sendSignForm(presetEmp){
+  const people = state.employees.filter(e=>e.status!=='leaver').sort((a,b)=>(a.last_name||'').localeCompare(b.last_name||''));
+  openModal(`<h2>Send for signature</h2><div class="modal-sub">Each person gets their own copy to sign</div>
+    <form onsubmit="sendSignRequests(event)">
+      <div class="form-group"><label class="req">Document title</label><input id="sg-title" required placeholder="e.g. Contract variation — change of hours"></div>
+      <div class="form-group"><label class="req">PDF to sign</label><input id="sg-file" type="file" accept="application/pdf,.pdf" required></div>
+      <div class="form-group"><label class="req">Send to</label>
+        <div class="toolbar" style="margin-bottom:6px"><input class="grow" id="sg-q" placeholder="Filter by name or department…" oninput="filterSignPeople()"><button type="button" class="btn btn-outline btn-sm" onclick="selectSignPeople(true)">Select shown</button><button type="button" class="btn btn-outline btn-sm" onclick="selectSignPeople(false)">Clear</button></div>
+        <div class="sig-people">${people.map(e=>`<label class="sig-person" data-search="${esc((e.first_name+' '+e.last_name+' '+(e.department||'')).toLowerCase())}"><input type="checkbox" class="sg-emp" value="${e.id}" ${presetEmp===e.id?'checked':''}> ${esc(e.first_name+' '+e.last_name)} <span class="small muted">${esc(e.department||'')}</span></label>`).join('')}</div>
+      </div>
+      <div class="form-group"><label>Message to the employee (optional)</label><textarea id="sg-msg" rows="2"></textarea></div>
+      <div class="form-row">
+        <div class="form-group"><label>Sign by (optional)</label><input id="sg-due" type="date"></div>
+        <div class="form-group"><label>File the signed copy as</label><select id="sg-cat">${Object.entries(DOC_CATEGORIES).map(([v,t])=>`<option value="${v}" ${v==='contract'?'selected':''}>${t}</option>`).join('')}</select></div>
+      </div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary" id="sg-send">Send</button></div>
+    </form>`, true);
+}
+function filterSignPeople(){ const q = val('sg-q').toLowerCase(); document.querySelectorAll('.sig-person').forEach(l => l.style.display = !q || l.dataset.search.includes(q) ? '' : 'none'); }
+function selectSignPeople(on){ document.querySelectorAll('.sig-person').forEach(l => { if (!on || l.style.display!=='none') l.querySelector('input').checked = on; }); }
+async function sendSignRequests(ev){
+  ev.preventDefault();
+  const file = document.getElementById('sg-file').files[0];
+  const ids = [...document.querySelectorAll('.sg-emp:checked')].map(i=>i.value);
+  if (!ids.length){ toast('Choose at least one person','error'); return; }
+  if (!file || !(file.type==='application/pdf' || /\.pdf$/i.test(file.name))){ toast('Please choose a PDF','error'); return; }
+  if (file.size > MAX_UPLOAD_BYTES){ toast('File is too large (max 15 MB)','error'); return; }
+  const btn = document.getElementById('sg-send'); btn.disabled = true; btn.textContent = 'Checking PDF…';
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const { PDFDocument } = await loadPdfLib();
+    await PDFDocument.load(bytes);   // fails for damaged or password-protected PDFs
+    const data = bytesToDataURL(bytes, 'application/pdf'), hash = await sha256Bytes(bytes);
+    const base = { title: val('sg-title'), message: val('sg-msg'), due_date: val('sg-due')||null, category: val('sg-cat'), file: { data, filename: file.name, mime_type:'application/pdf' }, file_hash: hash, status:'pending', sent_by: state.user.username, sent_by_name: state.user.full_name, sent_at: nowISO() };
+    for (const empId of ids){
+      const r = { id: uuid(), employee_id: empId, ...base };
+      await idbPut('sign_requests', r);
+      await logAction('sign_request_send', { employee_id: empId, detail: r.title });
+    }
+    closeModal(); toast(`Sent to ${ids.length} ${ids.length===1?'person':'people'} for signature`);
+    if (window._detailEmp && refreshEmpTab()) return;
+    navigate('signatures');
+  } catch(e){
+    btn.disabled = false; btn.textContent = 'Send';
+    toast(/load the PDF tools/.test(e.message) ? e.message : 'This PDF can\'t be used — it may be damaged or password protected', 'error');
+  }
+}
+async function cancelSign(id){
+  const r = await idbGet('sign_requests', id); if (!r || r.status!=='pending') return;
+  if (!confirm(`Cancel the signature request for ${empName(r.employee_id)}?`)) return;
+  Object.assign(r, { status:'cancelled', cancelled_at: nowISO(), cancelled_by: state.user.username });
+  await idbPut('sign_requests', r); await logAction('sign_request_cancel', { employee_id:r.employee_id, detail:r.title });
+  toast('Request cancelled'); if (window._detailEmp && refreshEmpTab()) return; navigate(state.page);
+}
+async function openSignFile(id, which){
+  const r = await idbGet('sign_requests', id); if (!r) return;
+  if (state.user.role!=='hr_admin' && r.employee_id!==state.user.employee_id){ toast('Not permitted','error'); return; }
+  const f = which==='signed' ? r.signed_file : r.file;
+  openStoredFile(f, false);
+}
+
+// ── Employee: review and sign ──
+async function renderMySignatures(c){
+  const me = state.user.employee_id;
+  if (!me){ c.innerHTML = '<div class="empty">No employee record is linked to your account.</div>'; return; }
+  const mine = (await idbByIndex('sign_requests','employee_id',me)).filter(r=>r.status!=='cancelled').sort((a,b)=>(b.sent_at||'').localeCompare(a.sent_at||''));
+  const pending = mine.filter(r=>r.status==='pending'), done = mine.filter(r=>r.status!=='pending');
+  c.innerHTML = `
+    <div class="card"><div class="card-head"><h3>Waiting for your signature (${pending.length})</h3></div>
+      ${pending.length ? pending.map(r=>`<div class="doc-row"><div class="dic">📕</div><div class="di"><div class="t">${esc(r.title)}</div><div class="small muted">From ${esc(r.sent_by_name||r.sent_by)} · ${fmtDate(r.sent_at)}</div>${r.message?`<div class="small" style="margin-top:4px">${esc(r.message)}</div>`:''}<div style="margin-top:6px">${sigStatusBadge(r)}</div></div><div class="doc-btns"><button class="btn btn-accent btn-sm" onclick="signForm('${r.id}')">Review &amp; sign</button></div></div>`).join('') : '<div class="empty small">Nothing to sign.</div>'}
+    </div>
+    <div class="card"><div class="card-head"><h3>Signed and declined</h3></div>${sigTable(done, false, 'No signed documents yet.')}</div>`;
+}
+async function mySignCardHtml(){
+  if (!state.user.employee_id) return '';
+  const pending = (await idbByIndex('sign_requests','employee_id',state.user.employee_id)).filter(r=>r.status==='pending');
+  if (!pending.length) return '';
+  return `<div class="card ack-banner"><div class="card-head"><h3>Documents to sign (${pending.length})</h3></div>${
+    pending.map(r=>`<div class="doc-row"><div class="dic">📕</div><div class="di"><div class="t">${esc(r.title)}</div><div style="margin-top:4px">${sigStatusBadge(r)}</div></div><div class="doc-btns"><button class="btn btn-accent btn-sm" onclick="signForm('${r.id}')">Review &amp; sign</button></div></div>`).join('')
+  }</div>`;
+}
+async function signForm(id){
+  const r = await idbGet('sign_requests', id);
+  if (!r || r.employee_id!==state.user.employee_id){ toast('Not permitted','error'); return; }
+  if (r.status!=='pending'){ toast('This request is no longer waiting for a signature','info'); return; }
+  if (!r.viewed_at){ r.viewed_at = nowISO(); await idbPut('sign_requests', r); await logAction('sign_request_viewed', { employee_id:r.employee_id, detail:r.title }); }
+  if (window._sigFrameUrl) URL.revokeObjectURL(window._sigFrameUrl);
+  window._sigFrameUrl = URL.createObjectURL(dataURLtoBlob(r.file.data));
+  const me = empById(state.user.employee_id);
+  openModal(`<h2>${esc(r.title)}</h2><div class="modal-sub">From ${esc(r.sent_by_name||r.sent_by)} · ${fmtDate(r.sent_at)}${r.due_date?` · please sign by ${fmtDate(r.due_date)}`:''}</div>
+    ${r.message?`<p class="small" style="margin-bottom:10px">${esc(r.message)}</p>`:''}
+    <iframe class="sig-frame" src="${window._sigFrameUrl}#navpanes=0&view=FitH" title="Document to sign"></iframe>
+    <p class="small" style="margin:6px 0 16px"><a href="#" onclick="event.preventDefault();openSignFile('${r.id}','original')">Open the document in a new tab</a> if it doesn't show above.</p>
+    <form onsubmit="submitSignature(event,'${r.id}')">
+      <div class="form-group"><label class="req">Your full name</label><input id="sg-name" value="${esc(me?me.first_name+' '+me.last_name:state.user.full_name)}" required oninput="if(window._sigMode==='type') drawTypedSignature()"></div>
+      <div class="pill-tabs" id="sg-mode" style="margin-bottom:8px"><div class="pill active" onclick="setSigMode('draw',this)">Draw signature</div><div class="pill" onclick="setSigMode('type',this)">Use typed name</div></div>
+      <canvas id="sg-pad" class="sig-pad"></canvas>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:4px 0 14px"><span class="small muted" id="sg-hint">Sign in the box with your mouse or finger.</span><button type="button" class="btn btn-outline btn-sm" onclick="clearSigPad()">Clear</button></div>
+      <label style="display:flex;gap:10px;align-items:flex-start;font-size:.92rem"><input type="checkbox" id="sg-consent" required style="margin-top:3px;width:18px;height:18px"> <span>${esc(SIGN_CONSENT)}</span></label>
+      <div class="modal-actions"><button type="button" class="btn btn-danger" style="margin-right:auto" onclick="declineSignForm('${r.id}')">Decline</button><button type="button" class="btn btn-outline" onclick="closeModal()">Not now</button><button type="submit" class="btn btn-primary" id="sg-submit">Sign document</button></div>
+    </form>`, true);
+  initSigPad();
+}
+// Signature pad: pointer events so it works with mouse, pen and touch
+function initSigPad(){
+  const cv = document.getElementById('sg-pad'), dpr = window.devicePixelRatio || 1;
+  cv.width = cv.clientWidth * dpr; cv.height = cv.clientHeight * dpr;
+  const ctx = cv.getContext('2d'); ctx.scale(dpr, dpr); ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#1a2a5a';
+  window._sigMode = 'draw'; window._sigInk = false;
+  let drawing = false;
+  const pos = e => { const b = cv.getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; };
+  cv.onpointerdown = e => { if (window._sigMode!=='draw') return; drawing = true; cv.setPointerCapture(e.pointerId); const [x,y] = pos(e); ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+0.1,y+0.1); ctx.stroke(); window._sigInk = true; };
+  cv.onpointermove = e => { if (!drawing) return; const [x,y] = pos(e); ctx.lineTo(x,y); ctx.stroke(); };
+  cv.onpointerup = cv.onpointercancel = () => { drawing = false; };
+}
+function clearSigPad(){ const cv = document.getElementById('sg-pad'); cv.getContext('2d').clearRect(0,0,cv.width,cv.height); window._sigInk = false; if (window._sigMode==='type') drawTypedSignature(); }
+function setSigMode(mode, el){
+  document.querySelectorAll('#sg-mode .pill').forEach(p=>p.classList.remove('active')); el.classList.add('active');
+  window._sigMode = mode; const cv = document.getElementById('sg-pad'); cv.getContext('2d').clearRect(0,0,cv.width,cv.height); window._sigInk = false;
+  cv.style.cursor = mode==='draw' ? 'crosshair' : 'default';
+  document.getElementById('sg-hint').textContent = mode==='draw' ? 'Sign in the box with your mouse or finger.' : 'Your typed name is used as your signature.';
+  if (mode==='type') drawTypedSignature();
+}
+function drawTypedSignature(){
+  const cv = document.getElementById('sg-pad'), ctx = cv.getContext('2d'), w = cv.clientWidth, h = cv.clientHeight;
+  ctx.clearRect(0,0,cv.width,cv.height);
+  const name = val('sg-name'); if (!name){ window._sigInk = false; return; }
+  let size = 44; ctx.fillStyle = '#1a2a5a'; ctx.textBaseline = 'middle';
+  do { ctx.font = `italic ${size}px "Segoe Script","Brush Script MT","Lucida Handwriting",cursive`; size -= 2; } while (ctx.measureText(name).width > w - 30 && size > 14);
+  ctx.fillText(name, 15, h/2); window._sigInk = true;
+}
+// Trim empty space around the signature so it sits neatly on the certificate
+function signatureImage(){
+  const cv = document.getElementById('sg-pad'), ctx = cv.getContext('2d'), { width:w, height:h } = cv;
+  const px = ctx.getImageData(0,0,w,h).data; let x0=w, y0=h, x1=-1, y1=-1;
+  for (let y=0;y<h;y++) for (let x=0;x<w;x++) if (px[(y*w+x)*4+3] > 0){ if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y; }
+  if (x1 < 0) return null;
+  const pad = 6, out = document.createElement('canvas'); out.width = x1-x0+pad*2; out.height = y1-y0+pad*2;
+  out.getContext('2d').drawImage(cv, x0-pad, y0-pad, out.width, out.height, 0, 0, out.width, out.height);
+  return out.toDataURL('image/png');
+}
+async function submitSignature(ev, id){
+  ev.preventDefault();
+  const r = await idbGet('sign_requests', id);
+  if (!r || r.employee_id!==state.user.employee_id || r.status!=='pending'){ toast('This request is no longer waiting for a signature','error'); closeModal(); return; }
+  const name = val('sg-name');
+  if (!window._sigInk){ toast(window._sigMode==='draw' ? 'Please draw your signature in the box' : 'Please type your name','error'); return; }
+  if (!document.getElementById('sg-consent').checked){ toast('Please tick to confirm','error'); return; }
+  const sigPng = signatureImage(); if (!sigPng){ toast('Please add your signature','error'); return; }
+  const btn = document.getElementById('sg-submit'); btn.disabled = true; btn.textContent = 'Signing…';
+  try {
+    const original = dataURLtoBytes(r.file.data);
+    if (await sha256Bytes(original) !== r.file_hash) throw new Error('The document has changed since it was sent. Please ask HR to send it again.');
+    const { PDFDocument, StandardFonts, rgb } = await loadPdfLib();
+    const pdf = await PDFDocument.load(original);
+    const font = await pdf.embedFont(StandardFonts.Helvetica), bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+    // Standard PDF fonts only cover Western characters: fall back to the unaccented letter, else "?"
+    const charset = new Set(font.getCharacterSet());
+    const T = s => [...String(s ?? '-')].map(ch => ch==='\n' || charset.has(ch.codePointAt(0)) ? ch : ([...ch.normalize('NFD')].find(c=>charset.has(c.codePointAt(0))) || '?')).join('');
+    const signedAt = nowISO(), when = fmtDateTime(signedAt), ref = r.id.slice(0,8).toUpperCase();
+    const me = empById(state.user.employee_id);
+    // Footer on every page of the original
+    const footer = T(`Electronically signed by ${name} on ${when} - ref ${ref}`);
+    pdf.getPages().forEach(p => { const { width } = p.getSize(); p.drawText(footer, { x: 30, y: 12, size: 7, font, color: rgb(0.45,0.45,0.45), maxWidth: width - 60 }); });
+    // Signature certificate page
+    const page = pdf.addPage([595.28, 841.89]);
+    let y = 790; const L = 60;
+    const line = (label, value) => { page.drawText(label, { x:L, y, size:9, font:bold, color:rgb(0.3,0.3,0.3) }); page.drawText(T(value||'-'), { x:L+150, y, size:9, font, maxWidth: 595-L-150-40, lineHeight: 12 }); y -= 18; };
+    page.drawText('Signature certificate', { x:L, y, size:20, font:bold, color:rgb(0.25,0.25,0.26) }); y -= 18;
+    page.drawText('Komfort Partitioning Ltd - HR System electronic signature record', { x:L, y, size:9, font, color:rgb(0.45,0.45,0.45) }); y -= 34;
+    const sigImg = await pdf.embedPng(sigPng); const scale = Math.min(260/sigImg.width, 90/sigImg.height, 1);
+    page.drawRectangle({ x:L, y:y-100, width:300, height:110, borderColor:rgb(0.8,0.8,0.8), borderWidth:1 });
+    page.drawImage(sigImg, { x:L+12, y:y-90+(90-sigImg.height*scale)/2, width:sigImg.width*scale, height:sigImg.height*scale });
+    y -= 118;
+    page.drawText(T(`${name}  -  ${when}`), { x:L, y, size:10, font:bold }); y -= 30;
+    line('Document', r.title);
+    line('Original file', r.file.filename);
+    line('Signed by', name);
+    line('Employee record', `${me?me.first_name+' '+me.last_name:''}${me?.employee_number?' ('+me.employee_number+')':''}`);
+    line('User account', state.user.username);
+    line('Signed at', `${when} (${signedAt} UTC)`);
+    line('Signature method', window._sigMode==='draw' ? 'Drawn by hand' : 'Typed name');
+    line('Sent by', `${r.sent_by_name||r.sent_by} on ${fmtDateTime(r.sent_at)}`);
+    line('First opened', fmtDateTime(r.viewed_at));
+    line('Reference', r.id);
+    y -= 6; page.drawText('Original document fingerprint (SHA-256)', { x:L, y, size:9, font:bold, color:rgb(0.3,0.3,0.3) }); y -= 14;
+    page.drawText(r.file_hash, { x:L, y, size:8.5, font }); y -= 26;
+    page.drawText('Signer agreed:', { x:L, y, size:9, font:bold, color:rgb(0.3,0.3,0.3) }); y -= 14;
+    page.drawText(T(SIGN_CONSENT), { x:L, y, size:9, font, maxWidth: 595-L-60, lineHeight: 12 });
+    const signedBytes = await pdf.save();
+    const signedData = bytesToDataURL(signedBytes, 'application/pdf'), signedHash = await sha256Bytes(signedBytes);
+    const filename = r.file.filename.replace(/\.pdf$/i,'') + ' - signed.pdf';
+    // File the signed copy in the employee's documents
+    const docId = uuid();
+    await idbPut('documents', { id:docId, employee_id:r.employee_id, category:r.category||'contract', title:`${r.title} (signed)`, filename, mime_type:'application/pdf', data:signedData, description:`Signed electronically by ${name} on ${when}`, uploaded_by:'e-signature', uploaded_at:signedAt });
+    Object.assign(r, { status:'signed', signed_at:signedAt, signer_name:name, signature_method: window._sigMode, signature_image:sigPng, consent:SIGN_CONSENT, signed_file:{ data:signedData, filename, mime_type:'application/pdf' }, signed_hash:signedHash, document_id:docId });
+    await idbPut('sign_requests', r);
+    await logAction('document_signed', { employee_id:r.employee_id, detail:r.title });
+    closeModal(); toast('Signed — a copy has been saved to your documents');
+    navigate(state.page);
+  } catch(e){
+    btn.disabled = false; btn.textContent = 'Sign document';
+    toast(e.message || 'Signing failed', 'error');
+  }
+}
+function declineSignForm(id){
+  openModal(`<h2>Decline to sign</h2><div class="modal-sub">HR will see your reason</div>
+    <form onsubmit="declineSign(event,'${id}')">
+      <div class="form-group"><label class="req">Reason</label><textarea id="sg-decline" rows="3" required placeholder="e.g. The hours shown are wrong"></textarea></div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="signForm('${id}')">Back</button><button type="submit" class="btn btn-danger">Decline</button></div>
+    </form>`);
+}
+async function declineSign(ev, id){
+  ev.preventDefault();
+  const r = await idbGet('sign_requests', id);
+  if (!r || r.employee_id!==state.user.employee_id || r.status!=='pending') return;
+  Object.assign(r, { status:'declined', declined_at:nowISO(), declined_reason:val('sg-decline') });
+  await idbPut('sign_requests', r); await logAction('document_sign_declined', { employee_id:r.employee_id, detail:r.title });
+  closeModal(); toast('Declined — HR can see your reason'); navigate(state.page);
+}
+
+// ═══════════════════════════════════════════════
 // AUDIT TRAIL (HR admin)
 // ═══════════════════════════════════════════════
 const AUDIT_LABELS = {
@@ -3239,6 +3566,7 @@ const AUDIT_LABELS = {
   job_history_save:'Saved job history', job_history_change:'Recorded role change', job_history_delete:'Deleted job history',
   document_upload:'Uploaded document', document_update:'Updated document', document_delete:'Deleted document', document_download:'Downloaded document', document_open:'Opened document', document_acknowledged:'Confirmed read & understood',
   training_create:'Added training record', training_update:'Updated training record', training_delete:'Deleted training record', pay_document_upload:'Uploaded pay document', pay_document_open:'Opened pay document', pay_document_delete:'Deleted pay document', pay_documents_bulk_upload:'Bulk uploaded pay documents',
+  sign_request_send:'Sent document for signature', sign_request_cancel:'Cancelled signature request', sign_request_viewed:'Opened document to sign', document_signed:'Signed document electronically', document_sign_declined:'Declined to sign document',
   announcement_post:'Posted announcement', announcement_update:'Edited announcement', announcement_delete:'Deleted announcement',
   task_create:'Created task', task_update:'Updated task', task_complete:'Completed task', task_reopen:'Reopened task', task_delete:'Deleted task',
   settings_update:'Changed settings', seed:'System set up'
@@ -3548,7 +3876,7 @@ async function renderMyProfile(c){
   const e = empById(id);
   const contacts = await idbByIndex('contacts','employee_id',id);
   const jobs = await jobsFor(id);
-  const ackCard = await myAckCardHtml();
+  const ackCard = (await mySignCardHtml()) + (await myAckCardHtml());
   // Employees land on My Profile, so show the latest announcements here (managers see them on the dashboard)
   const annHtml = state.user.role==='employee' ? await latestAnnouncementsHtml() : '';
   c.innerHTML = `

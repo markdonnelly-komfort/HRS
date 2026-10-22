@@ -214,6 +214,38 @@ function initializeSchema() {
       updated_at TEXT
     )
   `);
+  // E-signature requests: one per employee per document. The signed PDF carries
+  // a certificate page; file_hash is the SHA-256 of the original as sent.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS sign_requests (
+      id TEXT PRIMARY KEY,
+      employee_id TEXT NOT NULL REFERENCES employees(id),
+      title TEXT NOT NULL,
+      message TEXT,
+      due_date TEXT,
+      category TEXT,
+      file_name TEXT,
+      file_path TEXT,
+      file_hash TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','signed','declined','cancelled')),
+      sent_by TEXT,
+      sent_at TEXT DEFAULT (datetime('now')),
+      viewed_at TEXT,
+      signed_at TEXT,
+      signer_name TEXT,
+      signature_method TEXT,
+      signature_image_path TEXT,
+      signed_file_path TEXT,
+      signed_hash TEXT,
+      signer_ip TEXT,
+      document_id TEXT REFERENCES documents(id),
+      declined_at TEXT,
+      declined_reason TEXT,
+      cancelled_at TEXT,
+      cancelled_by TEXT
+    )
+  `);
+  db.run('CREATE INDEX IF NOT EXISTS idx_sign_requests_emp ON sign_requests(employee_id)');
   db.run(`
     CREATE TABLE IF NOT EXISTS announcements (
       id TEXT PRIMARY KEY,
