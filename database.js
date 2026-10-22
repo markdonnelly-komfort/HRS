@@ -247,6 +247,18 @@ function initializeSchema() {
     )
   `);
   db.run('CREATE INDEX IF NOT EXISTS idx_sign_requests_emp ON sign_requests(employee_id)');
+  // Saved report-builder definitions (columns / filters / sort / grouping as JSON)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS saved_reports (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      source TEXT NOT NULL,
+      definition TEXT NOT NULL,
+      created_by TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
+    )
+  `);
   // Asset / equipment register and its issue/return history
   db.run(`
     CREATE TABLE IF NOT EXISTS assets (

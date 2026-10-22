@@ -205,6 +205,16 @@
     .ack-banner .doc-row { background: #fff; }
 
     /* ── Team calendar (people × days) ── */
+    /* ── Report builder ── */
+    .rb-list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .rb-list .small { flex-basis: 100%; }
+    .rb-list .pill { font-family: inherit; }
+    .rb-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .rb-chip { display: inline-flex; align-items: center; gap: 2px; background: var(--bg); border: 1px solid var(--border); border-radius: 16px; padding: 3px 4px 3px 12px; font-size: 0.85rem; }
+    .rb-chip button { border: 0; background: none; cursor: pointer; color: var(--text-light); padding: 0 5px; font-size: 1rem; line-height: 1; }
+    .rb-chip button:hover { color: var(--primary); }
+    .rb-filter { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .rb-filter select, .rb-filter input { width: auto; max-width: 100%; padding: 8px; border: 2px solid var(--border); border-radius: 8px; font-size: 0.9rem; background: #fff; }
     .cal-legend { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-bottom: 12px; font-size: 0.85rem; }
     .cal-legend label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
     .cal-wrap { overflow-x: auto; }
@@ -270,6 +280,8 @@
     }
     @media print {
       .sidebar, .topbar, .toolbar, .btn, .tabs, .pill-tabs { display: none !important; }
+      .no-print, .modal-overlay { display: none !important; }
+      .card { box-shadow: none; padding: 0; }
       .main { margin-left: 0; }
       .content { padding: 0; }
       #app.active { display: block; }
@@ -347,8 +359,9 @@ const DB_NAME = 'KomfortHR';
 // v7: bank holidays / shutdown days, return-to-work interviews, announcements.
 // v8: e-signature requests.
 // v9: asset / equipment register.
-const DB_VERSION = 9;
-const STORES = ['users','employees','contacts','documents','leave','reviews','objectives','tasks','audit_log','settings','training','pay_documents','jobs','one_to_ones','doc_acks','company_days','rtw','announcements','sign_requests','assets'];
+// v10: saved custom reports (report builder).
+const DB_VERSION = 10;
+const STORES = ['users','employees','contacts','documents','leave','reviews','objectives','tasks','audit_log','settings','training','pay_documents','jobs','one_to_ones','doc_acks','company_days','rtw','announcements','sign_requests','assets','saved_reports'];
 let db = null;
 
 function openDB() {
@@ -438,6 +451,9 @@ function openDB() {
       }
       if (!d.objectStoreNames.contains('announcements')) {
         d.createObjectStore('announcements', { keyPath: 'id' });
+      }
+      if (!d.objectStoreNames.contains('saved_reports')) {
+        d.createObjectStore('saved_reports', { keyPath: 'id' });
       }
       if (!d.objectStoreNames.contains('assets')) {
         // Each asset holds its current holder (employee_id) plus an issue/return history
@@ -744,6 +760,7 @@ const NAV = {
     { id:'assets',        label:'Assets & Equipment',ic:'⚒', badge:'leaverAssets' },
     { id:'payslip-uploads',label:'Payslip Uploads', ic:'£' },
     { id:'reports',       label:'Reports',          ic:'▣' },
+    { id:'report-builder',label:'Report Builder',   ic:'⌕' },
     { id:'tasks',         label:'HR Tasks',         ic:'✔', badge:'openTasks' },
     { id:'users',         label:'User Accounts',    ic:'⚷' },
     { id:'audit',         label:'Audit Trail',      ic:'☰' },
@@ -870,7 +887,7 @@ async function navigate(page){
   await refreshCaches();
   if (!state.user) return;   // signed out while loading
   const mgr = state.user.role==='manager';
-  const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', 'leave-holiday':mgr?'Team Holiday':'Holiday', 'leave-sickness':mgr?'Team Sickness':'Sickness', 'leave-other':mgr?'Team Absences':'Other Absences', performance:mgr?'Team Performance':'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: mgr?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-sickness':'My Sickness', 'my-other':'My Other Absences', 'my-performance':'My Performance', training: mgr?'Team Training':'Training', 'my-training':'My Training', 'my-payslips':'My Payslips', 'payslip-uploads':'Payslip Uploads', 'org-chart':'Organisation Chart', calendar:'Holiday Calendar', announcements:'Announcements', 'company-days':'Bank Holidays & Shutdowns', audit:'Audit Trail', signatures:'E-signatures', 'my-signatures':'Documents to Sign', assets:'Assets & Equipment' };
+  const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', 'leave-holiday':mgr?'Team Holiday':'Holiday', 'leave-sickness':mgr?'Team Sickness':'Sickness', 'leave-other':mgr?'Team Absences':'Other Absences', performance:mgr?'Team Performance':'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: mgr?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-sickness':'My Sickness', 'my-other':'My Other Absences', 'my-performance':'My Performance', training: mgr?'Team Training':'Training', 'my-training':'My Training', 'my-payslips':'My Payslips', 'payslip-uploads':'Payslip Uploads', 'org-chart':'Organisation Chart', calendar:'Holiday Calendar', announcements:'Announcements', 'company-days':'Bank Holidays & Shutdowns', audit:'Audit Trail', signatures:'E-signatures', 'my-signatures':'Documents to Sign', assets:'Assets & Equipment', 'report-builder':'Report Builder' };
   document.getElementById('page-title').textContent = titles[page] || page;
   const c = document.getElementById('content');
   c.innerHTML = '<div class="empty">Loading…</div>';
@@ -885,6 +902,7 @@ async function navigate(page){
       case 'performance': await renderPerformance(c); break;
       case 'documents': await renderDocuments(c); break;
       case 'reports': await renderReports(c); break;
+      case 'report-builder': if (state.user.role!=='hr_admin') throw new Error('Not permitted'); await renderReportBuilder(c); break;
       case 'tasks': await renderTasks(c); break;
       case 'users': await renderUsers(c); break;
       case 'settings': await renderSettings(c); break;
@@ -3762,6 +3780,379 @@ async function declineSign(ev, id){
 }
 
 // ═══════════════════════════════════════════════
+// REPORT BUILDER (HR admin)
+// ═══════════════════════════════════════════════
+// Build a report from one data source: pick columns, add filters, sort,
+// optionally group with counts/totals, then view, print or export to CSV.
+// Reports can be saved; a few ready-made ones are provided as starting points.
+const RB_OPS = {
+  text:   [['is','is'],['not','is not'],['contains','contains'],['ncontains','does not contain'],['empty','is empty'],['nempty','is not empty']],
+  number: [['eq','='],['ne','≠'],['gt','>'],['ge','≥'],['lt','<'],['le','≤'],['empty','is empty'],['nempty','is not empty']],
+  date:   [['on','on'],['before','before'],['after','after'],['between','between'],['last','in the last … days'],['next','in the next … days'],['hy','in this holiday year'],['empty','is empty'],['nempty','is not empty']]
+};
+const rbOps = f => RB_OPS[f.type==='enum' ? 'text' : f.type];
+const F = (key, label, type, get, extra = {}) => ({ key, label, type, get, ...extra });
+const ymdOnly = v => v ? String(v).slice(0,10) : '';
+const yearsBetween = (from, to = today()) => { if (!from) return null; const a = new Date(from), b = new Date(to); let y = b.getFullYear()-a.getFullYear(); if (b.getMonth()<a.getMonth() || (b.getMonth()===a.getMonth() && b.getDate()<a.getDate())) y--; return y; };
+const EMP_STATUS = { active:'Active', on_leave:'On leave', leaver:'Leaver' };
+// Employee columns: the short set is added to every other source
+function empFields(full){
+  const E = r => r.e || {};
+  const short = [
+    F('emp_no','Employee number','text', r=>E(r).employee_number),
+    F('name','Employee name','text', r=>r.e?`${r.e.first_name} ${r.e.last_name}`:''),
+    F('job','Job title','text', r=>E(r).job_title),
+    F('dept','Department','enum', r=>E(r).department),
+    F('site','Site','enum', r=>E(r).site),
+    F('manager','Manager','enum', r=>E(r).manager_id?empName(E(r).manager_id):''),
+    F('emp_status','Employee status','enum', r=>EMP_STATUS[E(r).status]||E(r).status)
+  ];
+  const more = !full ? [] : [
+    F('title','Title','enum', r=>E(r).title),
+    F('first','First name','text', r=>E(r).first_name),
+    F('last','Last name','text', r=>E(r).last_name),
+    F('director','Director','enum', r=>E(r).is_director?'Yes':'No'),
+    F('emp_type','Employment type','enum', r=>E(r).employment_type),
+    F('start','Start date','date', r=>E(r).start_date),
+    F('end','End date','date', r=>E(r).end_date),
+    F('service','Length of service (years)','number', r=>{ const s=E(r).start_date; if(!s) return null; const ms=(new Date(E(r).end_date||today())-new Date(s)); return Math.round(ms/31557600000*10)/10; }),
+    F('prob','Probation end date','date', r=>E(r).probation_end_date),
+    F('dob','Date of birth','date', r=>E(r).date_of_birth),
+    F('age','Age','number', r=>yearsBetween(E(r).date_of_birth)),
+    F('gender','Gender','enum', r=>E(r).gender),
+    F('ni','NI number','text', r=>E(r).ni_number),
+    F('work_email','Work email','text', r=>E(r).work_email),
+    F('work_phone','Work phone','text', r=>E(r).work_phone),
+    F('work_mobile','Work mobile','text', r=>E(r).work_mobile),
+    F('pers_email','Personal email','text', r=>E(r).personal_email),
+    F('mobile','Personal mobile','text', r=>E(r).mobile_phone),
+    F('address','Address','text', r=>[E(r).address_line1,E(r).address_line2,E(r).city].filter(Boolean).join(', ')),
+    F('postcode','Postcode','text', r=>E(r).postcode),
+    F('hours','Working hours / week','number', r=>E(r).working_hours),
+    F('notice','Notice period','text', r=>E(r).notice_period),
+    F('salary','Salary (£)','number', r=>E(r).salary, { money:true }),
+    F('allowance','Holiday allowance','number', r=>E(r).holiday_allowance)
+  ];
+  return [...short, ...more].map(f => ({ ...f, group:'Employee' }));
+}
+const RB_SOURCES = {
+  employees: { label:'Employees', note:'One row per employee',
+    fields: () => [...empFields(true), ...[
+      F('entitlement','Holiday entitlement','number', r=>r.bal.entitlement),
+      F('taken','Holiday taken','number', r=>r.bal.taken),
+      F('booked','Holiday booked (upcoming)','number', r=>r.bal.upcoming),
+      F('pending','Holiday pending','number', r=>r.bal.pending),
+      F('remaining','Holiday remaining','number', r=>r.bal.remaining),
+      F('sick_days','Sick days (this holiday year)','number', r=>r.sickDays),
+      F('sick_spells','Sickness spells (this holiday year)','number', r=>r.sickSpells),
+      F('bradford','Bradford Factor (52 weeks)','number', r=>r.bf.score),
+      F('assets','Equipment held','number', r=>r.assets),
+      F('training_n','Training records','number', r=>r.training.length),
+      F('training_due','Training expired / expiring','number', r=>r.training.filter(t=>['expired','expiring'].includes(trainingStatus(t).key)).length)
+    ].map(f=>({ ...f, group:'Holiday, absence & more' }))],
+    rows: async () => {
+      const [leave, assets, training, bounds] = [await idbGetAll('leave'), await idbGetAll('assets'), await idbGetAll('training'), await holidayYearBounds()];
+      const out = [];
+      for (const e of state.employees){
+        const sick = leave.filter(l=>l.employee_id===e.id && l.type==='sickness' && l.status==='approved' && l.start_date>=bounds.start && l.start_date<=bounds.end);
+        out.push({ e, bal: await leaveBalance(e.id), sickDays: sick.reduce((a,l)=>a+(Number(l.days)||0),0), sickSpells: sick.length, bf: bradford(e.id, leave),
+          assets: assets.filter(a=>a.status==='issued' && a.employee_id===e.id).length, training: training.filter(t=>t.employee_id===e.id) });
+      }
+      return out;
+    } },
+  leave: { label:'Holiday & absence', note:'One row per holiday, sickness or other absence record',
+    fields: () => [...empFields(false), ...[
+      F('l_type','Absence type','enum', r=>leaveLabel(r.l.type)),
+      F('l_status','Status','enum', r=>({pending:'Pending',approved:'Approved',rejected:'Rejected',cancelled:'Cancelled'})[r.l.status]||r.l.status),
+      F('l_from','From','date', r=>r.l.start_date),
+      F('l_to','To','date', r=>r.l.end_date),
+      F('l_days','Days','number', r=>Number(r.l.days)||0),
+      F('l_half','Half day','enum', r=>r.l.half_day?'Yes':'No'),
+      F('l_reason','Reason / notes','text', r=>r.l.reason),
+      F('l_requested','Requested on','date', r=>ymdOnly(r.l.requested_at)),
+      F('l_decided_by','Decided by','text', r=>r.l.decided_by),
+      F('l_decided','Decided on','date', r=>ymdOnly(r.l.decided_at))
+    ].map(f=>({ ...f, group:'Absence' }))],
+    rows: async () => (await idbGetAll('leave')).filter(l=>l.type!=='adjustment').map(l=>({ l, e: empById(l.employee_id) })) },
+  training: { label:'Training records', note:'One row per training record',
+    fields: () => [...empFields(false), ...[
+      F('t_title','Course / qualification','text', r=>r.t.title),
+      F('t_cat','Category','enum', r=>r.t.category),
+      F('t_provider','Provider','text', r=>r.t.provider),
+      F('t_done','Completed','date', r=>r.t.completed_date),
+      F('t_expiry','Expires','date', r=>r.t.expiry_date),
+      F('t_status','Status','enum', r=>trainingStatus(r.t).label),
+      F('t_cert','Certificate attached','enum', r=>r.t.file?'Yes':'No')
+    ].map(f=>({ ...f, group:'Training' }))],
+    rows: async () => (await idbGetAll('training')).map(t=>({ t, e: empById(t.employee_id) })) },
+  reviews: { label:'Reviews & appraisals', note:'One row per review',
+    fields: () => [...empFields(false), ...[
+      F('rv_type','Review type','enum', r=>r.rv.type==='annual'?'Annual appraisal':'Mid-year review'),
+      F('rv_period','Period','text', r=>r.rv.period),
+      F('rv_date','Scheduled','date', r=>r.rv.scheduled_date),
+      F('rv_status','Status','enum', r=>({scheduled:'Scheduled',in_progress:'In progress',completed:'Completed'})[r.rv.status]||r.rv.status),
+      F('rv_rating','Overall rating','enum', r=>r.rv.overall_rating),
+      F('rv_reviewer','Reviewer','enum', r=>r.rv.reviewer_id?empName(r.rv.reviewer_id):'')
+    ].map(f=>({ ...f, group:'Review' }))],
+    rows: async () => (await idbGetAll('reviews')).map(rv=>({ rv, e: empById(rv.employee_id) })) },
+  one_to_ones: { label:'One-to-ones', note:'One row per one-to-one',
+    fields: () => [...empFields(false), ...[
+      F('o_type','Type','enum', r=>r.o.type),
+      F('o_with','With','enum', r=>r.o.with_id?empName(r.o.with_id):'HR'),
+      F('o_date','Date','date', r=>r.o.date),
+      F('o_location','Location','enum', r=>r.o.location),
+      F('o_status','Status','enum', r=>({requested:'Requested',scheduled:'Scheduled',completed:'Completed',declined:'Declined',cancelled:'Cancelled'})[r.o.status]||r.o.status)
+    ].map(f=>({ ...f, group:'One-to-one' }))],
+    rows: async () => (await idbGetAll('one_to_ones')).map(o=>({ o, e: empById(o.employee_id) })) },
+  rtw: { label:'Return-to-work interviews', note:'One row per completed interview',
+    fields: () => [...empFields(false), ...[
+      F('x_sick_from','Off sick from','date', r=>r.l?.start_date),
+      F('x_sick_to','Off sick to','date', r=>r.l?.end_date),
+      F('x_days','Days off','number', r=>Number(r.l?.days)||0),
+      F('x_date','Interview date','date', r=>r.x.interview_date),
+      F('x_back','Returned to work','date', r=>r.x.returned_date),
+      F('x_cert','Certification','enum', r=>r.x.certification),
+      F('x_work','Work related','enum', r=>r.x.work_related),
+      F('x_fit','Fitness to work','enum', r=>r.x.fitness),
+      F('x_oh','Occupational health referral','enum', r=>r.x.oh_referral),
+      F('x_bf','Bradford Factor at interview','number', r=>r.x.bradford?.score),
+      F('x_by','Conducted by','enum', r=>r.x.conducted_by)
+    ].map(f=>({ ...f, group:'Return to work' }))],
+    rows: async () => { const leave = new Map((await idbGetAll('leave')).map(l=>[l.id,l])); return (await idbGetAll('rtw')).map(x=>({ x, l: leave.get(x.leave_id), e: empById(x.employee_id) })); } },
+  assets: { label:'Assets & equipment', note:'One row per asset (employee columns describe the current holder)',
+    fields: () => [...[
+      F('a_name','Asset','text', r=>r.a.name),
+      F('a_cat','Category','enum', r=>r.a.category),
+      F('a_tag','Asset tag','text', r=>r.a.asset_tag),
+      F('a_serial','Serial / reg','text', r=>r.a.serial),
+      F('a_status','Status','enum', r=>(ASSET_STATUS[r.a.status]||[r.a.status])[0]),
+      F('a_issued','Issued on','date', r=>r.a.issued_date),
+      F('a_bought','Purchase date','date', r=>r.a.purchase_date),
+      F('a_value','Value (£)','number', r=>r.a.value, { money:true })
+    ].map(f=>({ ...f, group:'Asset' })), ...empFields(false).map(f=>({ ...f, label: f.label.replace('Employee name','Held by'), group:'Held by' }))],
+    rows: async () => (await idbGetAll('assets')).map(a=>({ a, e: a.employee_id ? empById(a.employee_id) : null })) },
+  jobs: { label:'Job history', note:'One row per role held',
+    fields: () => [...empFields(false), ...[
+      F('j_title','Role – job title','text', r=>r.j.job_title),
+      F('j_dept','Role – department','enum', r=>r.j.department),
+      F('j_site','Role – site','enum', r=>r.j.site),
+      F('j_type','Role – employment type','enum', r=>r.j.employment_type),
+      F('j_from','Role – from','date', r=>r.j.start_date),
+      F('j_to','Role – to','date', r=>r.j.end_date),
+      F('j_reason','Reason','enum', r=>r.j.reason)
+    ].map(f=>({ ...f, group:'Role' }))],
+    rows: async () => (await idbGetAll('jobs')).map(j=>({ j, e: empById(j.employee_id) })) }
+};
+// Ready-made starting points (not editable; open one and "Save as" to keep a copy)
+const RB_TEMPLATES = [
+  { id:'tpl-headcount', name:'Headcount by department', source:'employees', columns:['name','job','dept','site'], filters:[{key:'emp_status',op:'not',value:'Leaver'}], sort:{key:'dept',dir:'asc'}, group:{key:'dept',sum:''} },
+  { id:'tpl-balances', name:'Holiday balances', source:'employees', columns:['name','dept','entitlement','taken','booked','pending','remaining'], filters:[{key:'emp_status',op:'not',value:'Leaver'}], sort:{key:'remaining',dir:'desc'}, group:{key:'',sum:''} },
+  { id:'tpl-starters', name:'Starters this holiday year', source:'employees', columns:['emp_no','name','job','dept','site','start'], filters:[{key:'start',op:'hy'}], sort:{key:'start',dir:'asc'}, group:{key:'',sum:''} },
+  { id:'tpl-leavers', name:'Leavers in the last 12 months', source:'employees', columns:['emp_no','name','job','dept','start','end','service'], filters:[{key:'emp_status',op:'is',value:'Leaver'},{key:'end',op:'last',value:'365'}], sort:{key:'end',dir:'desc'}, group:{key:'',sum:''} },
+  { id:'tpl-sickness', name:'Sickness this holiday year', source:'leave', columns:['name','dept','l_from','l_to','l_days','l_reason'], filters:[{key:'l_type',op:'is',value:'Sickness'},{key:'l_status',op:'is',value:'Approved'},{key:'l_from',op:'hy'}], sort:{key:'l_from',dir:'desc'}, group:{key:'',sum:''} },
+  { id:'tpl-sick-dept', name:'Sick days by department (this holiday year)', source:'leave', columns:['name','dept','l_from','l_days'], filters:[{key:'l_type',op:'is',value:'Sickness'},{key:'l_status',op:'is',value:'Approved'},{key:'l_from',op:'hy'}], sort:{key:'dept',dir:'asc'}, group:{key:'dept',sum:'l_days'} },
+  { id:'tpl-bradford', name:'Bradford Factor scores', source:'employees', columns:['name','dept','sick_spells','sick_days','bradford'], filters:[{key:'bradford',op:'gt',value:'0'}], sort:{key:'bradford',dir:'desc'}, group:{key:'',sum:''} },
+  { id:'tpl-training', name:'Training expiring in the next 90 days', source:'training', columns:['name','dept','t_title','t_expiry','t_status'], filters:[{key:'t_expiry',op:'next',value:'90'},{key:'emp_status',op:'not',value:'Leaver'}], sort:{key:'t_expiry',dir:'asc'}, group:{key:'',sum:''} },
+  { id:'tpl-probation', name:'Probation ending in the next 60 days', source:'employees', columns:['name','job','manager','start','prob'], filters:[{key:'prob',op:'next',value:'60'},{key:'emp_status',op:'is',value:'Active'}], sort:{key:'prob',dir:'asc'}, group:{key:'',sum:''} },
+  { id:'tpl-equipment', name:'Equipment issued', source:'assets', columns:['a_name','a_cat','a_tag','name','dept','a_issued'], filters:[{key:'a_status',op:'is',value:'Issued'}], sort:{key:'name',dir:'asc'}, group:{key:'',sum:''} }
+];
+const rbBlank = () => ({ id:null, name:'', source:'employees', columns:['emp_no','name','job','dept','site','start'], filters:[{ key:'emp_status', op:'is', value:'Active' }], sort:{ key:'name', dir:'asc' }, group:{ key:'', sum:'' } });
+const rbFields = () => RB_SOURCES[window._rb.source].fields();
+const rbField = key => rbFields().find(f=>f.key===key);
+async function renderReportBuilder(c){
+  window._rb = window._rb || rbBlank();
+  window._rbBounds = await holidayYearBounds();
+  window._rbSaved = (await idbGetAll('saved_reports')).sort((a,b)=>a.name.localeCompare(b.name));
+  c.innerHTML = `
+    <div class="card no-print"><div class="card-head"><h3>Reports</h3><button class="btn btn-outline btn-sm" onclick="rbNew()">+ New report</button></div>
+      <div class="rb-list">
+        <div class="small muted" style="margin-bottom:4px">Ready-made</div>
+        ${RB_TEMPLATES.map(t=>`<button class="pill ${window._rb.id===t.id?'active':''}" onclick="rbLoad('${t.id}')">${esc(t.name)}</button>`).join('')}
+        ${window._rbSaved.length?`<div class="small muted" style="margin:10px 0 4px">Saved</div>${window._rbSaved.map(s=>`<button class="pill ${window._rb.id===s.id?'active':''}" onclick="rbLoad('${s.id}')">${esc(s.name)}</button>`).join('')}`:''}
+      </div>
+    </div>
+    <div class="card no-print" id="rb-builder"></div>
+    <div class="card" id="rb-results"><div class="empty">Loading…</div></div>`;
+  await rbLoadRows();
+  rbRender();
+}
+async function rbLoadRows(){ window._rbRows = await RB_SOURCES[window._rb.source].rows(); }
+function rbRender(){
+  const rb = window._rb, fields = rbFields();
+  const groups = [...new Set(fields.map(f=>f.group))];
+  const fieldOptions = (sel, filter = () => true, blank = '') => `${blank?`<option value="">${blank}</option>`:''}${groups.map(g=>`<optgroup label="${esc(g)}">${fields.filter(f=>f.group===g && filter(f)).map(f=>`<option value="${f.key}" ${sel===f.key?'selected':''}>${esc(f.label)}</option>`).join('')}</optgroup>`).join('')}`;
+  const tpl = RB_TEMPLATES.find(t=>t.id===rb.id), saved = (window._rbSaved||[]).find(s=>s.id===rb.id);
+  document.getElementById('rb-builder').innerHTML = `
+    <div class="card-head"><h3>${esc(saved?saved.name:tpl?tpl.name:'New report')}${tpl?' <span class="badge b-grey">Ready-made</span>':''}</h3>
+      <div class="doc-btns">${saved?`<button class="btn btn-outline btn-sm" onclick="rbSaveForm(false)">Save</button>`:''}<button class="btn btn-outline btn-sm" onclick="rbSaveForm(true)">${saved?'Save as…':'Save report…'}</button>${saved?` <button class="btn btn-danger btn-sm" onclick="rbDelete('${saved.id}')">Delete</button>`:''}</div></div>
+    <div class="form-row">
+      <div class="form-group"><label>Report on</label><select onchange="rbSetSource(this.value)">${Object.entries(RB_SOURCES).map(([k,s])=>`<option value="${k}" ${rb.source===k?'selected':''}>${esc(s.label)}</option>`).join('')}</select><div class="small muted">${esc(RB_SOURCES[rb.source].note)}</div></div>
+      <div class="form-group"><label>Add a column</label><select onchange="rbAddCol(this.value)">${fieldOptions('', f=>!rb.columns.includes(f.key), 'Choose a field…')}</select></div>
+    </div>
+    <div class="form-group"><label>Columns <span class="small muted">(in this order)</span></label><div class="rb-chips">${
+      rb.columns.map((k,i)=>{ const f = rbField(k); return f ? `<span class="rb-chip">${esc(f.label)} <button title="Move left" onclick="rbMoveCol(${i},-1)">‹</button><button title="Move right" onclick="rbMoveCol(${i},1)">›</button><button title="Remove" onclick="rbRemoveCol(${i})">×</button></span>` : ''; }).join('') || '<span class="small muted">No columns yet — add some above.</span>'
+    }</div></div>
+    <div class="form-group"><label>Filters <span class="small muted">(rows must match all of them)</span></label>
+      ${rb.filters.map((fl,i)=>rbFilterRow(fl,i,fieldOptions)).join('')}
+      <button class="btn btn-outline btn-sm" onclick="rbAddFilter()">+ Add filter</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Sort by</label><div style="display:flex;gap:8px"><select onchange="rbSet('sort','key',this.value)">${fieldOptions(rb.sort.key, ()=>true, 'No sorting')}</select><select style="max-width:140px" onchange="rbSet('sort','dir',this.value)"><option value="asc" ${rb.sort.dir!=='desc'?'selected':''}>Ascending</option><option value="desc" ${rb.sort.dir==='desc'?'selected':''}>Descending</option></select></div></div>
+      <div class="form-group"><label>Group and count by <span class="small muted">(optional)</span></label><div style="display:flex;gap:8px"><select onchange="rbSet('group','key',this.value)">${fieldOptions(rb.group.key, f=>f.type!=='number', 'No grouping')}</select>${rb.group.key?`<select onchange="rbSet('group','sum',this.value)"><option value="">Count only</option>${fields.filter(f=>f.type==='number').map(f=>`<option value="${f.key}" ${rb.group.sum===f.key?'selected':''}>+ total of ${esc(f.label)}</option>`).join('')}</select>`:''}</div></div>
+    </div>`;
+  rbRun();
+}
+function rbFilterRow(fl, i, fieldOptions){
+  const f = rbField(fl.key);
+  const ops = f ? rbOps(f) : RB_OPS.text;
+  const op = fl.op || ops[0][0];
+  const set = prop => `onchange="rbSetFilter(${i},'${prop}',this.value)"`;
+  let input = '';
+  if (f && !['empty','nempty','hy'].includes(op)){
+    if (f.type==='date' && op==='between') input = `<input type="date" value="${esc(fl.value||'')}" ${set('value')}> and <input type="date" value="${esc(fl.value2||'')}" ${set('value2')}>`;
+    else if (f.type==='date' && (op==='last' || op==='next')) input = `<input type="number" min="0" style="width:90px" value="${esc(fl.value||'')}" ${set('value')}> days`;
+    else if (f.type==='date') input = `<input type="date" value="${esc(fl.value||'')}" ${set('value')}>`;
+    else if (f.type==='number') input = `<input type="number" step="any" style="width:120px" value="${esc(fl.value??'')}" ${set('value')}>`;
+    else if (f.type==='enum' && (op==='is' || op==='not')){
+      const values = [...new Set((window._rbRows||[]).map(r=>f.get(r)).filter(v=>v!==null && v!==undefined && v!==''))].map(String).sort();
+      if (fl.value && !values.includes(fl.value)) values.unshift(fl.value);
+      input = `<select ${set('value')}><option value="">Choose…</option>${values.map(v=>`<option ${v===fl.value?'selected':''}>${esc(v)}</option>`).join('')}</select>`;
+    }
+    else input = `<input value="${esc(fl.value||'')}" ${set('value')}>`;
+  }
+  return `<div class="rb-filter"><select onchange="rbSetFilter(${i},'key',this.value)">${fieldOptions(fl.key)}</select><select onchange="rbSetFilter(${i},'op',this.value)">${ops.map(([v,t])=>`<option value="${v}" ${op===v?'selected':''}>${t}</option>`).join('')}</select>${input}<button class="btn btn-outline btn-sm" onclick="rbRemoveFilter(${i})" title="Remove filter">×</button></div>`;
+}
+function rbMatch(fl, row){
+  const f = rbField(fl.key); if (!f) return true;
+  const op = fl.op || rbOps(f)[0][0];
+  let v = f.get(row); const empty = v===null || v===undefined || v==='';
+  if (op==='empty') return empty;
+  if (op==='nempty') return !empty;
+  if (f.type==='number'){
+    if (fl.value==='' || fl.value==null) return true;   // filter not filled in yet
+    if (empty) return false; v = Number(v); const x = Number(fl.value);
+    return { eq:v===x, ne:v!==x, gt:v>x, ge:v>=x, lt:v<x, le:v<=x }[op];
+  }
+  if (f.type==='date'){
+    if (op==='hy') return !empty && ymdOnly(v)>=window._rbBounds.start && ymdOnly(v)<=window._rbBounds.end;
+    if (!fl.value) return true;
+    if (empty) return false; v = ymdOnly(v); const a = fl.value;
+    switch (op){
+      case 'on': return v===a;
+      case 'before': return v<a;
+      case 'after': return v>a;
+      case 'between': return v>=a && (!fl.value2 || v<=fl.value2);
+      case 'last': return v<=today() && v>=addDays(today(), -Number(a));
+      case 'next': return v>=today() && v<=addDays(today(), Number(a));
+    }
+    return true;
+  }
+  if (fl.value==='' || fl.value==null) return true;
+  const s = String(v??'').toLowerCase(), q = String(fl.value).toLowerCase();
+  return { is:s===q, not:s!==q, contains:s.includes(q), ncontains:!s.includes(q) }[op];
+}
+const rbFmt = (f, v) => v===null || v===undefined || v==='' ? '' : f.type==='date' ? fmtDate(v) : f.money ? fmtMoney(v) : String(v);
+function rbResult(){
+  const rb = window._rb;
+  let rows = (window._rbRows||[]).filter(r => rb.filters.every(fl => rbMatch(fl, r)));
+  const sf = rbField(rb.sort.key);
+  if (sf){
+    const dir = rb.sort.dir==='desc' ? -1 : 1;
+    rows = rows.slice().sort((a,b) => { const x = sf.get(a), y = sf.get(b); if (x==null || x==='') return 1; if (y==null || y==='') return -1; return (sf.type==='number' ? x-y : String(x).localeCompare(String(y))) * dir; });
+  }
+  return { rows, cols: rb.columns.map(rbField).filter(Boolean) };
+}
+function rbRun(){
+  const rb = window._rb, { rows, cols } = rbResult(), box = document.getElementById('rb-results');
+  const gf = rbField(rb.group.key), sumF = rbField(rb.group.sum);
+  let summary = '';
+  if (gf){
+    const groups = new Map();
+    rows.forEach(r => { const k = rbFmt(gf, gf.get(r)) || '(blank)'; const g = groups.get(k) || { n:0, sum:0 }; g.n++; if (sumF) g.sum += Number(sumF.get(r))||0; groups.set(k, g); });
+    const list = [...groups.entries()].sort((a,b)=>b[1].n-a[1].n || a[0].localeCompare(b[0])), max = Math.max(1, ...list.map(([,g])=>sumF?g.sum:g.n));
+    window._rbGroupRows = list.map(([k,g])=>[k, g.n, ...(sumF?[Math.round(g.sum*100)/100]:[])]);
+    summary = `<h4 style="margin-bottom:8px">By ${esc(gf.label.toLowerCase())}</h4><div class="table-wrap"><table><thead><tr><th>${esc(gf.label)}</th><th>Count</th>${sumF?`<th>Total ${esc(sumF.label.toLowerCase())}</th>`:''}<th style="width:35%"></th></tr></thead><tbody>${
+      list.map(([k,g])=>`<tr><td>${esc(k)}</td><td>${g.n}</td>${sumF?`<td>${sumF.money?fmtMoney(g.sum):Math.round(g.sum*100)/100}</td>`:''}<td><div class="progress"><div style="width:${Math.round((sumF?g.sum:g.n)/max*100)}%"></div></div></td></tr>`).join('')
+    }<tr><td><strong>Total</strong></td><td><strong>${rows.length}</strong></td>${sumF?`<td><strong>${sumF.money?fmtMoney(list.reduce((a,[,g])=>a+g.sum,0)):Math.round(list.reduce((a,[,g])=>a+g.sum,0)*100)/100}</strong></td>`:''}<td></td></tr></tbody></table></div><div style="height:16px"></div>`;
+  }
+  const shown = rows.slice(0, 500);
+  const title = (window._rbSaved||[]).find(s=>s.id===rb.id)?.name || RB_TEMPLATES.find(t=>t.id===rb.id)?.name || 'Custom report';
+  box.innerHTML = `<div class="card-head"><h3>${esc(title)} <span class="small muted">· ${rows.length} row${rows.length!==1?'s':''} · ${fmtDate(today())}</span></h3>
+      <div class="doc-btns no-print"><button class="btn btn-outline btn-sm" onclick="rbExport()">Export CSV</button>${gf?` <button class="btn btn-outline btn-sm" onclick="rbExport(true)">Export summary</button>`:''} <button class="btn btn-outline btn-sm" onclick="window.print()">Print</button></div></div>
+    ${rb.filters.length?`<div class="small muted" style="margin-bottom:10px">Filters: ${rb.filters.map(fl=>{ const f=rbField(fl.key); if(!f) return ''; const op=(rbOps(f).find(([v])=>v===(fl.op||rbOps(f)[0][0]))||['',''])[1]; if (['last','next'].includes(fl.op)) return `${esc(f.label)} ${esc(op.replace('…', fl.value||'…'))}`;
+        return `${esc(f.label)} ${esc(op)}${['empty','nempty','hy'].includes(fl.op)?'':' '+esc(f.type==='date'?[fl.value,fl.value2].filter(Boolean).map(fmtDate).join(' and '):(fl.value||'…'))}`; }).filter(Boolean).join(' · ')}</div>`:''}
+    ${summary}
+    ${!cols.length ? '<div class="empty small">Add some columns to see results.</div>' : rows.length ? `<div class="table-wrap"><table><thead><tr>${cols.map(f=>`<th>${esc(f.label)}</th>`).join('')}</tr></thead><tbody>${
+      shown.map(r=>`<tr>${cols.map(f=>`<td>${esc(rbFmt(f, f.get(r)))}</td>`).join('')}</tr>`).join('')
+    }</tbody></table></div>${rows.length>shown.length?`<p class="small muted" style="margin-top:8px">Showing the first ${shown.length} rows — export to CSV for all ${rows.length}.</p>`:''}` : '<div class="empty small">No rows match these filters.</div>'}`;
+}
+// ── Builder actions ──
+async function rbSetSource(src){
+  const rb = window._rb; rb.source = src;
+  const keys = new Set(RB_SOURCES[src].fields().map(f=>f.key));
+  rb.columns = rb.columns.filter(k=>keys.has(k)); if (!rb.columns.length) rb.columns = RB_SOURCES[src].fields().slice(0,5).map(f=>f.key);
+  rb.filters = rb.filters.filter(fl=>keys.has(fl.key));
+  if (!keys.has(rb.sort.key)) rb.sort = { key:'', dir:'asc' };
+  if (!keys.has(rb.group.key)) rb.group = { key:'', sum:'' };
+  document.getElementById('rb-results').innerHTML = '<div class="empty">Loading…</div>';
+  await rbLoadRows(); rbRender();
+}
+function rbAddCol(k){ if (k && !window._rb.columns.includes(k)) window._rb.columns.push(k); rbRender(); }
+function rbRemoveCol(i){ window._rb.columns.splice(i,1); rbRender(); }
+function rbMoveCol(i, d){ const c = window._rb.columns, j = i+d; if (j<0 || j>=c.length) return; [c[i], c[j]] = [c[j], c[i]]; rbRender(); }
+function rbAddFilter(){ const f = rbFields()[0]; window._rb.filters.push({ key:f.key, op:rbOps(f)[0][0], value:'' }); rbRender(); }
+function rbRemoveFilter(i){ window._rb.filters.splice(i,1); rbRender(); }
+function rbSetFilter(i, prop, v){
+  const fl = window._rb.filters[i]; fl[prop] = v;
+  if (prop==='key'){ const f = rbField(v); fl.op = rbOps(f)[0][0]; fl.value = ''; fl.value2 = ''; }
+  if (prop==='op' && ['last','next'].includes(v) && !fl.value) fl.value = '30';
+  rbRender();
+}
+function rbSet(part, prop, v){ window._rb[part][prop] = v; if (part==='group' && prop==='key' && !v) window._rb.group.sum = ''; rbRender(); }
+function rbNew(){ window._rb = rbBlank(); navigate('report-builder'); }
+function rbLoad(id){
+  const src = RB_TEMPLATES.find(t=>t.id===id) || (window._rbSaved||[]).find(s=>s.id===id);
+  if (!src) return;
+  window._rb = JSON.parse(JSON.stringify({ id:src.id, name:src.name, source:src.source, columns:src.columns, filters:src.filters, sort:src.sort||{key:'',dir:'asc'}, group:src.group||{key:'',sum:''} }));
+  navigate('report-builder');
+}
+function rbSaveForm(asNew){
+  const saved = (window._rbSaved||[]).find(s=>s.id===window._rb.id);
+  if (saved && !asNew) return rbSave(null, false);
+  openModal(`<h2>Save report</h2><form onsubmit="rbSave(event,true)">
+      <div class="form-group"><label class="req">Report name</label><input id="rb-name" required value="${esc(saved?saved.name+' (copy)':RB_TEMPLATES.find(t=>t.id===window._rb.id)?.name||'')}"></div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
+    </form>`);
+}
+async function rbSave(ev, asNew){
+  if (ev) ev.preventDefault();
+  const rb = window._rb, existing = (window._rbSaved||[]).find(s=>s.id===rb.id);
+  const rec = { id: asNew || !existing ? uuid() : existing.id, name: asNew || !existing ? val('rb-name') : existing.name,
+    source: rb.source, columns: rb.columns, filters: rb.filters, sort: rb.sort, group: rb.group,
+    created_by: existing && !asNew ? existing.created_by : state.user.username, created_at: existing && !asNew ? existing.created_at : nowISO(), updated_at: nowISO() };
+  await idbPut('saved_reports', rec);
+  await logAction('report_save', { detail: rec.name });
+  window._rb.id = rec.id; closeModal(); toast('Report saved'); navigate('report-builder');
+}
+async function rbDelete(id){
+  const s = (window._rbSaved||[]).find(x=>x.id===id); if (!s || !confirm(`Delete the saved report "${s.name}"?`)) return;
+  await idbDelete('saved_reports', id); await logAction('report_delete', { detail: s.name });
+  window._rb.id = null; toast('Report deleted'); navigate('report-builder');
+}
+function rbExport(summary){
+  const rb = window._rb, name = ((window._rbSaved||[]).find(s=>s.id===rb.id)?.name || RB_TEMPLATES.find(t=>t.id===rb.id)?.name || 'custom-report');
+  const file = name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'') + (summary?'-summary':'') + '-' + today() + '.csv';
+  if (summary){
+    const gf = rbField(rb.group.key), sumF = rbField(rb.group.sum);
+    downloadCSV(file, [[gf.label, 'Count', ...(sumF?['Total '+sumF.label]:[])], ...(window._rbGroupRows||[])]);
+  } else {
+    const { rows, cols } = rbResult();
+    downloadCSV(file, [cols.map(f=>f.label), ...rows.map(r=>cols.map(f=>{ const v = f.get(r); return v==null ? '' : f.type==='date' ? ymdOnly(v) : v; }))]);
+  }
+  logAction('report_export', { detail: name + (summary?' (summary)':'') });
+}
+
+// ═══════════════════════════════════════════════
 // ASSETS & EQUIPMENT
 // ═══════════════════════════════════════════════
 // Register of company equipment. Each asset records its current holder plus
@@ -3960,6 +4351,7 @@ const AUDIT_LABELS = {
   job_history_save:'Saved job history', job_history_change:'Recorded role change', job_history_delete:'Deleted job history',
   document_upload:'Uploaded document', document_view:'Viewed document', document_update:'Updated document', document_delete:'Deleted document', document_download:'Downloaded document', document_open:'Opened document', document_acknowledged:'Confirmed read & understood',
   training_create:'Added training record', training_update:'Updated training record', training_delete:'Deleted training record', pay_document_upload:'Uploaded pay document', pay_document_open:'Opened pay document', pay_document_delete:'Deleted pay document', pay_documents_bulk_upload:'Bulk uploaded pay documents',
+  report_save:'Saved custom report', report_delete:'Deleted custom report', report_export:'Exported report',
   sign_request_send:'Sent document for signature', sign_request_cancel:'Cancelled signature request', sign_request_viewed:'Opened document to sign', document_signed:'Signed document electronically', document_sign_declined:'Declined to sign document',
   asset_create:'Added asset', asset_update:'Updated asset', asset_delete:'Deleted asset', asset_issue:'Issued equipment', asset_return:'Recorded equipment return',
   announcement_post:'Posted announcement', announcement_update:'Edited announcement', announcement_delete:'Deleted announcement',
@@ -4025,6 +4417,7 @@ function exportAudit(){
 // REPORTS
 // ═══════════════════════════════════════════════
 async function renderReports(c){
+  setTopbar(`<button class="btn btn-accent" onclick="navigate('report-builder')">Build a custom report</button>`);
   const emps = state.employees;
   const active = emps.filter(e=>e.status==='active');
   const leave = await idbGetAll('leave');
