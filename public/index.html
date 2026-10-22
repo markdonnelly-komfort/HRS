@@ -716,7 +716,7 @@ function leaverAccessText(e){
 
 function logout(){
   if (state.user) logAction('logout');
-  state.user = null; state.leaver = null;
+  state.user = null; state.leaver = null; window._holYear = null;
   sessionStorage.removeItem('hr_session');
   document.getElementById('app').classList.remove('active');
   document.getElementById('login-view').style.display = 'flex';
@@ -991,10 +991,10 @@ async function holidayYearBounds(ref){
   return { start, end, label };
 }
 
-async function leaveBalance(employeeId){
+async function leaveBalance(employeeId, ref){   // ref = any date in the holiday year wanted (default: today)
   const e = empById(employeeId);
   const allowance = e?.holiday_allowance ?? DEFAULT_ALLOWANCE;
-  const bounds = await holidayYearBounds();
+  const bounds = await holidayYearBounds(ref);
   const rows = await idbByIndex('leave','employee_id',employeeId);
   let booked=0, pending=0, adjustments=0;
   rows.forEach(l => {
@@ -1026,9 +1026,9 @@ function takenPortion(l){
 }
 // Reusable holiday balance tiles. Pass empId to make Booked/Pending clickable.
 function balanceTiles(bal, empId){
-  const tk = empId ? `class="stat clickable" onclick="openHolidayList('${empId}','taken')"` : 'class="stat"';
-  const bk = empId ? `class="stat info clickable" onclick="openHolidayList('${empId}','booked')"` : 'class="stat info"';
-  const pd = empId ? `class="stat warn clickable" onclick="openHolidayList('${empId}','pending')"` : 'class="stat warn"';
+  const tk = empId ? `class="stat clickable" onclick="openHolidayList('${empId}','taken','${bal.bounds.start}')"` : 'class="stat"';
+  const bk = empId ? `class="stat info clickable" onclick="openHolidayList('${empId}','booked','${bal.bounds.start}')"` : 'class="stat info"';
+  const pd = empId ? `class="stat warn clickable" onclick="openHolidayList('${empId}','pending','${bal.bounds.start}')"` : 'class="stat warn"';
   return `<div class="stat-grid">
       <div class="stat"><div class="num">${bal.entitlement}</div><div class="lbl">Entitlement (${bal.bounds.label})${bal.adjustments?` · ${bal.allowance}+${bal.adjustments}`:''}</div></div>
       <div ${tk}><div class="num">${bal.taken}</div><div class="lbl">Taken so far</div></div>
@@ -1037,9 +1037,26 @@ function balanceTiles(bal, empId){
       <div class="stat ok"><div class="num">${bal.remaining}</div><div class="lbl">Remaining</div></div>
     </div>`;
 }
+// ── Holiday year picker (My Holiday and the employee Holiday tab) ──
+// window._holYear holds the start date of the chosen holiday year; empty = current.
+async function holidayYearPicker(empId){
+  const cur = await holidayYearBounds(), mmdd = cur.start.slice(5);
+  const curY = Number(cur.start.slice(0,4));
+  const recs = (await idbByIndex('leave','employee_id',empId)).filter(l=>l.type==='holiday' || l.type==='adjustment');
+  const minY = Math.min(curY-1, ...recs.map(l=>Number(l.start_date.slice(0,4))-1));
+  const opts = [];
+  for (let y = curY+1; y >= minY; y--){
+    const b = await holidayYearBounds(`${y}-${mmdd}`);
+    if (!opts.some(o=>o.start===b.start)) opts.push(b);
+  }
+  const chosen = await holidayYearBounds(window._holYear || undefined);
+  return { bounds: chosen, html: `<div class="toolbar" style="margin-bottom:12px"><label class="small" style="font-weight:600">Holiday year</label><select onchange="setHolidayYear(this.value)">${
+    opts.map(o=>`<option value="${o.start}" ${o.start===chosen.start?'selected':''}>${esc(o.label)}${o.start===cur.start?' (current)':''}</option>`).join('')}</select></div>` };
+}
+function setHolidayYear(start){ window._holYear = start; refreshLeaveViews(); }
 // Drill-down list for a holiday balance tile
-async function openHolidayList(empId, kind){
-  const bounds = await holidayYearBounds();
+async function openHolidayList(empId, kind, ref){
+  const bounds = await holidayYearBounds(ref);
   const rows = (await idbByIndex('leave','employee_id',empId)).filter(l=>l.type==='holiday' && l.start_date>=bounds.start && l.start_date<=bounds.end);
   let list = (kind==='pending' ? rows.filter(l=>l.status==='pending') : rows.filter(l=>l.status==='approved'));
   // Shutdown days that use holiday show alongside bookings
@@ -1410,8 +1427,9 @@ async function empTabContacts(body, id){
   </div>`;
 }
 async function empTabLeave(body, id){
-  const bal = await leaveBalance(id);
-  const all = (await idbByIndex('leave','employee_id',id)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
+  const yr = await holidayYearPicker(id), inYr = l => l.start_date>=yr.bounds.start && l.start_date<=yr.bounds.end;
+  const bal = await leaveBalance(id, yr.bounds.start);
+  const all = (await idbByIndex('leave','employee_id',id)).filter(inYr).sort((a,b)=>b.start_date.localeCompare(a.start_date));
   const holidays = all.filter(l=>l.type==='holiday');
   const adjustments = all.filter(l=>l.type==='adjustment');
   const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id));
@@ -1420,15 +1438,15 @@ async function empTabLeave(body, id){
   const leaveTable = (list,empty) => list.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
       list.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusCell(l)}</td><td class="small">${esc(l.reason)||'—'}${isCancelRequest(l)&&l.cancel_reason?`<div class="muted">Cancellation reason: ${esc(l.cancel_reason)}</div>`:''}</td>${act(l)}</tr>`).join('')
     }</tbody></table></div>`:`<div class="empty small">${empty}</div>`;
-  body.innerHTML = balanceTiles(bal, id) + `
+  body.innerHTML = yr.html + balanceTiles(bal, id) + `
     <div class="card"><div class="card-head"><h3>Holiday bookings</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="leaveForm('${id}',false,'holiday')">+ Add holiday</button>`:''}</div>
-      ${leaveTable(holidays,'No holiday booked.')}
+      ${leaveTable(holidays,`No holiday booked in ${yr.bounds.label}.`)}
     </div>
     <div class="card"><div class="card-head"><h3>Adjustments</h3>${canAdjust?`<button class="btn btn-accent btn-sm" onclick="adjustmentForm('${id}')">+ Add adjustment</button>`:''}</div>
       <p class="small muted" style="margin-bottom:10px">Manual tweaks to entitlement (e.g. worked an extra day → +1). Base allowance ${bal.allowance} ${bal.adjustments>=0?'+':'−'} ${Math.abs(bal.adjustments)} adjustment${Math.abs(bal.adjustments)!==1?'s':''} = <strong>${bal.entitlement} days</strong> entitlement.</p>
       ${adjustments.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Change</th><th>Note</th>${canAdjust?'<th></th>':''}</tr></thead><tbody>${
         adjustments.map(a=>`<tr><td>${fmtDate(a.start_date)}</td><td><strong>${a.days>=0?'+':''}${a.days} day${Math.abs(a.days)!==1?'s':''}</strong></td><td class="small">${esc(a.reason)||'—'}</td>${canAdjust?`<td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="deleteLeave('${a.id}')">Delete</button></td>`:''}</tr>`).join('')
-      }</tbody></table></div>`:'<div class="empty small">No adjustments recorded.</div>'}
+      }</tbody></table></div>`:`<div class="empty small">No adjustments in ${yr.bounds.label}.</div>`}
     </div>`;
 }
 async function empTabOther(body, id){
@@ -1796,6 +1814,7 @@ function refreshLeaveViews(){
 async function decideLeave(id, decision){
   const l = (await idbGetAll('leave')).find(x=>x.id===id);
   if (!l) return;
+  if (decision==='approved' && l.type==='holiday' && !(await checkHolidayLimit(l.employee_id, l.start_date, Number(l.days)||0, l.id))) return;
   l.status = decision; l.decided_by = state.user.username; l.decided_at = nowISO();
   await idbPut('leave', l);
   await logAction('leave_'+decision, { employee_id:l.employee_id, leave_id:id });
@@ -1874,7 +1893,7 @@ async function leaveForm(presetEmp, asEmployee, presetType){
   const typeEntries = Object.entries(LEAVE_TYPES).filter(([k])=> k!=='adjustment' && (isSelf ? k==='holiday' : true));
   openModal(`<h2>${isSelf?'Book holiday':'Record '+(LEAVE_TYPES[defType]?LEAVE_TYPES[defType].label.toLowerCase():'leave')}</h2>
     <form onsubmit="saveLeave(event, ${isSelf})">
-      ${isSelf?'':`<div class="form-group"><label class="req">Employee</label><select id="lv-emp" required><option value="">Select…</option>${empOptions.map(e=>`<option value="${e.id}" ${presetEmp===e.id?'selected':''}>${esc(e.first_name+' '+e.last_name)}</option>`).join('')}</select></div>`}
+      ${isSelf?'':`<div class="form-group"><label class="req">Employee</label><select id="lv-emp" required onchange="showHolidayAvailable()"><option value="">Select…</option>${empOptions.map(e=>`<option value="${e.id}" ${presetEmp===e.id?'selected':''}>${esc(e.first_name+' '+e.last_name)}</option>`).join('')}</select></div>`}
       <div class="form-row">
         <div class="form-group"><label class="req">Type</label><select id="lv-type" onchange="recalcLeaveDays()">${(()=>{ const opt=([k,v])=>`<option value="${k}" ${defType===k?'selected':''}>${v.label}</option>`; const main=typeEntries.filter(([k])=>!OTHER_ABSENCE.includes(k)), oth=typeEntries.filter(([k])=>OTHER_ABSENCE.includes(k)); return main.map(opt).join('')+(oth.length?`<optgroup label="Other absence">${oth.map(opt).join('')}</optgroup>`:''); })()}</select></div>
         <div class="form-group"><label>Half day</label><select id="lv-half" onchange="recalcLeaveDays()"><option value="false">No</option><option value="true">Yes (single day)</option></select></div>
@@ -1884,7 +1903,7 @@ async function leaveForm(presetEmp, asEmployee, presetType){
         <div class="form-group"><label class="req">To</label><input id="lv-end" type="date" value="${today()}" onchange="recalcLeaveDays()" required></div>
       </div>
       <div class="form-row">
-        <div class="form-group"><label>Working days</label><input id="lv-days" type="number" step="0.5" value="1"><div class="small muted">Auto: Mon–Fri, excluding bank holidays and shutdown days. Adjust if needed.</div></div>
+        <div class="form-group"><label>Working days</label><input id="lv-days" type="number" step="0.5" value="1" onchange="showHolidayAvailable()"><div class="small muted">Auto: Mon–Fri, excluding bank holidays and shutdown days. Adjust if needed.</div><div class="small" id="lv-avail" style="margin-top:4px"></div></div>
         ${isSelf?'':`<div class="form-group"><label>Status</label><select id="lv-status"><option value="approved">Booked (approved)</option><option value="pending">Pending approval</option></select><div class="small muted">Pending doesn't reduce the balance until booked.</div></div>`}
       </div>
       <div class="form-group"><label>Reason / notes</label><textarea id="lv-reason" rows="2"></textarea></div>
@@ -1898,6 +1917,35 @@ function recalcLeaveDays(){
   let d = workingDays(s,e);
   if (half) d = 0.5;
   document.getElementById('lv-days').value = d;
+  showHolidayAvailable();
+}
+// ── Holiday limit ──
+// Days still free to book in the holiday year a booking falls in: remaining
+// minus requests already awaiting approval (ignoreId = the request being approved).
+async function holidayAvailable(empId, date, ignoreId){
+  const bal = await leaveBalance(empId, date);
+  let pending = bal.pending;
+  if (ignoreId){ const l = await idbGet('leave', ignoreId); if (l && l.type==='holiday' && l.status==='pending' && l.start_date>=bal.bounds.start && l.start_date<=bal.bounds.end) pending -= Number(l.days)||0; }
+  return { available: bal.remaining - pending, bal, pending };
+}
+// Returns true if the booking can go ahead. Employees and managers are stopped;
+// HR is warned and can go ahead (e.g. an agreed exception).
+async function checkHolidayLimit(empId, date, days, ignoreId){
+  const { available, bal, pending } = await holidayAvailable(empId, date, ignoreId);
+  if (days <= available) return true;
+  const self = empId===state.user.employee_id;
+  const msg = `${self?'You only have':empName(empId)+' only has'} ${available} day${available!==1?'s':''} left to book in ${bal.bounds.label} (${bal.remaining} remaining${pending?`, ${pending} awaiting approval`:''}). This needs ${days}.`;
+  if (state.user.role==='hr_admin') return confirm(msg + '\n\nBook it anyway? The holiday balance will go below zero.');
+  toast(msg, 'error'); return false;
+}
+// Live "days available" hint on the booking form
+async function showHolidayAvailable(){
+  const box = document.getElementById('lv-avail'); if (!box) return;
+  const empId = document.getElementById('lv-emp') ? val('lv-emp') : state.user.employee_id;
+  if (val('lv-type')!=='holiday' || !empId || !val('lv-start')){ box.textContent = ''; return; }
+  const { available, bal } = await holidayAvailable(empId, val('lv-start'));
+  const need = Number(val('lv-days'))||0;
+  box.innerHTML = `${available} day${available!==1?'s':''} available to book in ${esc(bal.bounds.label)}${need>available?` · <strong style="color:var(--danger)">this needs ${need}</strong>`:''}`;
 }
 async function saveLeave(ev, isSelf){
   ev.preventDefault();
@@ -1905,6 +1953,8 @@ async function saveLeave(ev, isSelf){
   if (!empId){ toast('Select an employee','error'); return; }
   const type = val('lv-type');
   const status = isSelf ? 'pending' : (val('lv-status') || 'approved');
+  if (val('lv-end') < val('lv-start')){ toast('"To" date is before the "From" date','error'); return; }
+  if (type==='holiday' && !(await checkHolidayLimit(empId, val('lv-start'), Number(val('lv-days'))||0))) return;
   const rec = {
     id: uuid(), employee_id: empId, type,
     start_date: val('lv-start'), end_date: val('lv-end'),
@@ -4741,13 +4791,14 @@ async function deleteMyContact(id){ if(!confirm('Delete this contact?'))return; 
 async function renderMyLeave(c){
   const id = state.user.employee_id;
   if (!id){ c.innerHTML='<div class="empty">No employee record linked to your account.</div>'; return; }
-  const bal = await leaveBalance(id);
-  const all = (await idbByIndex('leave','employee_id',id)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
+  const yr = await holidayYearPicker(id), inYr = l => l.start_date>=yr.bounds.start && l.start_date<=yr.bounds.end;
+  const bal = await leaveBalance(id, yr.bounds.start);
+  const all = (await idbByIndex('leave','employee_id',id)).filter(inYr).sort((a,b)=>b.start_date.localeCompare(a.start_date));
   const holidays = all.filter(l=>l.type==='holiday');
   const adjustments = all.filter(l=>l.type==='adjustment');
   const ro = !!state.leaver;   // leavers can view their record but not book or change anything
   if (!ro) setTopbar(`<button class="btn btn-accent" onclick="leaveForm(null,true)">+ Book holiday</button>`);
-  c.innerHTML = balanceTiles(bal, id) + `
+  c.innerHTML = yr.html + balanceTiles(bal, id) + `
     <div class="card"><div class="card-head"><h3>My holiday</h3>${ro?'':`<button class="btn btn-accent btn-sm" onclick="leaveForm(null,true)">+ Book holiday</button>`}</div>
       ${holidays.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th><th></th></tr></thead><tbody>${
         holidays.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusCell(l)}</td><td class="small">${esc(l.reason)||'—'}${l.cancel_requested&&l.cancel_reason?`<div class="muted">Cancellation reason: ${esc(l.cancel_reason)}</div>`:''}</td><td style="text-align:right;white-space:nowrap">${
@@ -4755,7 +4806,7 @@ async function renderMyLeave(c){
           : canRequestCancel(l) ? `<button class="btn btn-outline btn-sm" onclick="cancelRequestForm('${l.id}')">Request cancellation</button>`
           : isCancelRequest(l) ? `<button class="btn btn-outline btn-sm" onclick="withdrawCancelRequest('${l.id}')">Withdraw request</button>` : ''
         }</td></tr>`).join('')
-      }</tbody></table></div>`:'<div class="empty small">No holiday booked yet.</div>'}
+      }</tbody></table></div>`:`<div class="empty small">No holiday booked in ${yr.bounds.label}.</div>`}
       <p class="small muted" style="margin-top:10px;${ro?'display:none':''}">Need to cancel an approved holiday that hasn't started yet? Use <strong>Request cancellation</strong> — it goes to your manager for approval, and the holiday stays booked until they approve it.</p>
     </div>
     ${companyDaysCardHtml()}
