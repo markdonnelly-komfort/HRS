@@ -183,6 +183,8 @@
     .doc-row { flex-wrap: wrap; }
     .doc-row .doc-btns { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
     .ack-banner { border-left: 5px solid var(--accent); background: #fffbea; }
+    .card-slim { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 20px; }
+    .card-slim h3 { font-size: 1rem; margin: 0; }
     .viewer-frame { width: 100%; height: 70vh; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
     .viewer-img { text-align: center; max-height: 70vh; overflow: auto; }
     .viewer-img img { max-width: 100%; }
@@ -1156,6 +1158,13 @@ async function renderDashboard(c){
       <div class="stat clickable" onclick="openDashList('tasks')"><div class="num">${myTasks.length}</div><div class="lbl">Open tasks</div></div>
     </div>
 
+    ${pending.length ? `<div class="card">
+      <div class="card-head"><h3>Pending leave approvals (${pending.length})</h3><button class="btn btn-primary btn-sm" onclick="navigate('leave-holiday')">Review all</button></div>
+      <div class="table-wrap"><table><thead><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Days</th><th></th></tr></thead><tbody>${
+        pending.slice(0,6).map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${leaveBadge(l.type)}</td><td>${fmtDate(l.start_date)} – ${fmtDate(l.end_date)}</td><td>${l.days}</td><td style="text-align:right"><button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')">Approve</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button></td></tr>`).join('')
+      }</tbody></table></div>
+    </div>` : `<div class="card card-slim"><h3>Pending leave approvals</h3><span class="small muted">✓ Nothing waiting for approval</span></div>`}
+
     ${isMgr?`<div class="card">
       <div class="card-head"><h3>Team holiday — next 30 days (${teamHols.length})</h3><button class="btn btn-outline btn-sm" onclick="navigate('calendar')">Holiday Calendar</button></div>
       ${teamHols.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>When</th></tr></thead><tbody>${
@@ -1169,13 +1178,6 @@ async function renderDashboard(c){
         probDue.map(e=>{ const overdue=e.probation_end_date<today(); return `<tr class="clickable" onclick="employeeDetail('${e.id}')"><td>${esc(e.first_name+' '+e.last_name)}</td><td>${esc(e.job_title)}</td><td>${e.manager_id?esc(empName(e.manager_id)):'—'}</td><td>${fmtDate(e.probation_end_date)} ${overdue?'<span class="badge b-red">Overdue</span>':'<span class="badge b-amber">Due soon</span>'}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="event.stopPropagation();employeeDetail('${e.id}')">Open</button></td></tr>`; }).join('')
       }</tbody></table></div>
     </div>`:''}
-
-    <div class="card">
-      <div class="card-head"><h3>Pending leave approvals</h3>${pending.length?`<button class="btn btn-primary btn-sm" onclick="navigate('leave-holiday')">Review all</button>`:''}</div>
-      ${pending.length ? `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Days</th><th></th></tr></thead><tbody>${
-        pending.slice(0,6).map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${leaveBadge(l.type)}</td><td>${fmtDate(l.start_date)} – ${fmtDate(l.end_date)}</td><td>${l.days}</td><td style="text-align:right"><button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')">Approve</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button></td></tr>`).join('')
-      }</tbody></table></div>` : `<div class="empty"><span class="ic">✓</span>No leave waiting for approval.</div>`}
-    </div>
 
     ${cancelReqs.length?`<div class="card">
       <div class="card-head"><h3>Holiday cancellation requests</h3><button class="btn btn-primary btn-sm" onclick="navigate('leave-holiday')">Review all</button></div>
