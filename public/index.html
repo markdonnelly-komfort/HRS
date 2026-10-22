@@ -716,7 +716,7 @@ function leaverAccessText(e){
 
 function logout(){
   if (state.user) logAction('logout');
-  state.user = null; state.leaver = null; window._holYear = null;
+  state.user = null; state.leaver = null; window._holYear = null; window._absPeriod = null;
   sessionStorage.removeItem('hr_session');
   document.getElementById('app').classList.remove('active');
   document.getElementById('login-view').style.display = 'flex';
@@ -1450,35 +1450,51 @@ async function empTabLeave(body, id){
       }</tbody></table></div>`:`<div class="empty small">No adjustments in ${yr.bounds.label}.</div>`}
     </div>`;
 }
+// ── Period picker for sickness and other absence: current year · prior year · all ──
+// window._absPeriod is 'current' (default), 'prior' or 'all'.
+async function absencePeriod(){
+  const cur = await holidayYearBounds(), prior = await holidayYearBounds(addDays(cur.start, -1));
+  const key = window._absPeriod || 'current';
+  const b = key==='all' ? null : key==='prior' ? prior : cur;
+  const pill = (k, t) => `<div class="pill ${key===k?'active':''}" onclick="setAbsencePeriod('${k}')">${esc(t)}</div>`;
+  return {
+    bounds: b, label: b ? b.label : 'all years',
+    inPeriod: l => !b || (l.start_date>=b.start && l.start_date<=b.end),
+    html: `<div class="pill-tabs" style="align-items:center;margin-bottom:12px"><span class="small" style="font-weight:600;margin-right:4px">Show</span>${pill('prior', prior.label)}${pill('current', cur.label+' · current')}${pill('all','All')}</div>`
+  };
+}
+function setAbsencePeriod(k){ window._absPeriod = k; refreshLeaveViews(); }
 async function empTabOther(body, id){
-  const other = (await idbByIndex('leave','employee_id',id)).filter(l=>OTHER_ABSENCE.includes(l.type)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
+  const per = await absencePeriod();
+  const other = (await idbByIndex('leave','employee_id',id)).filter(l=>OTHER_ABSENCE.includes(l.type) && per.inPeriod(l)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
   const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id));
-  body.innerHTML = `
-    <div class="card"><div class="card-head"><h3>Other absence</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="leaveForm('${id}',false,'unpaid')">+ Record absence</button>`:''}</div>
+  const days = other.filter(l=>l.status==='approved').reduce((a,l)=>a+(Number(l.days)||0),0);
+  body.innerHTML = per.html + `
+    <div class="card"><div class="card-head"><h3>Other absence <span class="small muted">· ${esc(per.label)} · ${days} day${days!==1?'s':''}</span></h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="leaveForm('${id}',false,'unpaid')">+ Record absence</button>`:''}</div>
       <p class="small muted" style="margin-bottom:10px">Maternity, paternity, compassionate, jury service, medical appointments, unpaid leave and other non-holiday absence.</p>
       ${other.length?`<div class="table-wrap"><table><thead><tr><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
         other.map(l=>`<tr><td>${leaveBadge(l.type)}</td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td>${canManage?`<td style="text-align:right;white-space:nowrap">${l.status==='pending'?`<button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')">Book</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button>`:`<button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button>`}</td>`:''}</tr>`).join('')
-      }</tbody></table></div>`:'<div class="empty small">No other absence recorded.</div>'}
+      }</tbody></table></div>`:`<div class="empty small">No other absence recorded${per.bounds?' in '+esc(per.label):''}.</div>`}
     </div>`;
 }
 async function empTabSickness(body, id){
-  const all = (await idbByIndex('leave','employee_id',id)).filter(l=>l.type==='sickness').sort((a,b)=>b.start_date.localeCompare(a.start_date));
-  const bounds = await holidayYearBounds();
-  const thisYr = all.filter(l=>l.start_date>=bounds.start && l.start_date<=bounds.end);
-  const totalDays = thisYr.reduce((a,l)=>a+l.days,0);
+  const per = await absencePeriod();
+  const everything = (await idbByIndex('leave','employee_id',id)).filter(l=>l.type==='sickness');
+  const all = everything.filter(per.inPeriod).sort((a,b)=>b.start_date.localeCompare(a.start_date));
+  const totalDays = all.reduce((a,l)=>a+(Number(l.days)||0),0);
   const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id));
-  const bf = bradford(id, all);
+  const bf = bradford(id, everything);   // always the last 52 weeks, whatever period is shown
   const done = await rtwDoneSet();
-  body.innerHTML = `
+  body.innerHTML = per.html + `
     <div class="stat-grid">
-      <div class="stat ${totalDays>0?'warn':'ok'}"><div class="num">${totalDays}</div><div class="lbl">Sick days (${bounds.label})</div></div>
-      <div class="stat"><div class="num">${thisYr.length}</div><div class="lbl">Episodes (${bounds.label})</div></div>
+      <div class="stat ${totalDays>0?'warn':'ok'}"><div class="num">${totalDays}</div><div class="lbl">Sick days (${esc(per.label)})</div></div>
+      <div class="stat"><div class="num">${all.length}</div><div class="lbl">Episodes (${esc(per.label)})</div></div>
       ${canManage?`<div class="stat info"><div class="num">${bf.score}</div><div class="lbl">Bradford Factor (52 weeks) · ${bf.S} spell${bf.S!==1?'s':''}, ${bf.D} day${bf.D!==1?'s':''}</div></div>`:''}
     </div>
     <div class="card"><div class="card-head"><h3>Sickness absence</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="leaveForm('${id}',false,'sickness')">+ Record sickness</button>`:''}</div>
       ${all.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Reason / notes</th><th>Return to work</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
         all.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td><td style="white-space:nowrap">${rtwCell(l, done)}</td>${canManage?`<td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button></td>`:''}</tr>`).join('')
-      }</tbody></table></div>`:'<div class="empty small">No sickness recorded.</div>'}
+      }</tbody></table></div>`:`<div class="empty small">No sickness recorded${per.bounds?' in '+esc(per.label):''}.</div>`}
     </div>`;
 }
 async function empTabPerformance(body, id){
@@ -1761,7 +1777,9 @@ async function renderLeave(c, category){
   if (scope) leave = leave.filter(l => scope.includes(l.employee_id));
   const pending = leave.filter(l=>l.status==='pending').sort((a,b)=>a.start_date.localeCompare(b.start_date));
   const cancelReqs = leave.filter(l=>isCancelRequest(l) && canDecideCancel(l)).sort((a,b)=>a.start_date.localeCompare(b.start_date));
-  const records = leave.filter(l=>l.status!=='pending').sort((a,b)=>b.start_date.localeCompare(a.start_date));
+  // Sickness and other absence records can be shown for this year, last year or all; anything awaiting action is always shown
+  const per = category==='holiday' ? null : await absencePeriod();
+  const records = leave.filter(l=>l.status!=='pending' && (!per || per.inPeriod(l))).sort((a,b)=>b.start_date.localeCompare(a.start_date));
   const meta = {
     holiday:  { recTitle:'Holiday bookings',       recBtn:'+ Record holiday',  preset:'holiday' },
     sickness: { recTitle:'Sickness records',       recBtn:'+ Record sickness', preset:'sickness' },
@@ -1800,8 +1818,9 @@ async function renderLeave(c, category){
       }</tbody></table></div>`:'<div class="empty small">No cancellation requests.</div>'}
     </div>`:''}
     ${sickExtra}
+    ${per ? per.html : ''}
     <div class="card">
-      <div class="card-head"><h3>${meta.recTitle}</h3></div>
+      <div class="card-head"><h3>${meta.recTitle}${per?` <span class="small muted">· ${esc(per.label)}</span>`:''}</h3></div>
       ${records.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th>${typeCol}<th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${rtwCol}</tr></thead><tbody>${
         records.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td>${typeCell(l)}<td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusCell(l)}</td><td class="small">${esc(l.reason)||'—'}</td>${rtwTd(l)}</tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">No records.</div>'}
@@ -4818,32 +4837,33 @@ async function renderMyLeave(c){
 async function renderMySickness(c){
   const id = state.user.employee_id;
   if (!id){ c.innerHTML='<div class="empty">No employee record linked to your account.</div>'; return; }
-  const bounds = await holidayYearBounds();
-  const sickness = (await idbByIndex('leave','employee_id',id)).filter(l=>l.type==='sickness').sort((a,b)=>b.start_date.localeCompare(a.start_date));
-  const thisYr = sickness.filter(l=>l.start_date>=bounds.start && l.start_date<=bounds.end);
-  const totalDays = thisYr.reduce((a,l)=>a+l.days,0);
+  const per = await absencePeriod();
+  const sickness = (await idbByIndex('leave','employee_id',id)).filter(l=>l.type==='sickness' && per.inPeriod(l)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
+  const totalDays = sickness.reduce((a,l)=>a+(Number(l.days)||0),0);
   const done = await rtwDoneSet();
-  c.innerHTML = `
+  c.innerHTML = per.html + `
     <div class="stat-grid">
-      <div class="stat ${totalDays>0?'warn':'ok'}"><div class="num">${totalDays}</div><div class="lbl">Sick days (${bounds.label})</div></div>
-      <div class="stat"><div class="num">${thisYr.length}</div><div class="lbl">Episodes (${bounds.label})</div></div>
+      <div class="stat ${totalDays>0?'warn':'ok'}"><div class="num">${totalDays}</div><div class="lbl">Sick days (${esc(per.label)})</div></div>
+      <div class="stat"><div class="num">${sickness.length}</div><div class="lbl">Episodes (${esc(per.label)})</div></div>
     </div>
     <div class="card"><div class="card-head"><h3>My sickness</h3></div>
       ${sickness.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Reason / notes</th><th>Return to work</th></tr></thead><tbody>${
         sickness.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td><td>${done.has(l.id)?`<button class="btn btn-outline btn-sm" onclick="rtwForm('${l.id}')">View</button>`:'<span class="small muted">—</span>'}</td></tr>`).join('')
-      }</tbody></table></div>`:'<div class="empty small">No sickness recorded. Sickness is logged by HR or your manager.</div>'}
+      }</tbody></table></div>`:`<div class="empty small">No sickness recorded${per.bounds?' in '+esc(per.label):''}. Sickness is logged by HR or your manager.</div>`}
     </div>`;
 }
 async function renderMyOther(c){
   const id = state.user.employee_id;
   if (!id){ c.innerHTML='<div class="empty">No employee record linked to your account.</div>'; return; }
-  const other = (await idbByIndex('leave','employee_id',id)).filter(l=>OTHER_ABSENCE.includes(l.type)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
-  c.innerHTML = `
-    <div class="card"><div class="card-head"><h3>My other absences</h3></div>
+  const per = await absencePeriod();
+  const other = (await idbByIndex('leave','employee_id',id)).filter(l=>OTHER_ABSENCE.includes(l.type) && per.inPeriod(l)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
+  const days = other.filter(l=>l.status==='approved').reduce((a,l)=>a+(Number(l.days)||0),0);
+  c.innerHTML = per.html + `
+    <div class="card"><div class="card-head"><h3>My other absences <span class="small muted">· ${esc(per.label)} · ${days} day${days!==1?'s':''}</span></h3></div>
       <p class="small muted" style="margin-bottom:10px">Maternity, paternity, compassionate, jury service, medical appointments, unpaid leave and other non-holiday absence. Recorded by HR or your manager.</p>
       ${other.length?`<div class="table-wrap"><table><thead><tr><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th></tr></thead><tbody>${
         other.map(l=>`<tr><td>${leaveBadge(l.type)}</td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td></tr>`).join('')
-      }</tbody></table></div>`:'<div class="empty small">No other absences recorded.</div>'}
+      }</tbody></table></div>`:`<div class="empty small">No other absences recorded${per.bounds?' in '+esc(per.label):''}.</div>`}
     </div>`;
 }
 async function cancelMyLeave(id){ if(!confirm('Cancel this request?'))return; const l=(await idbGetAll('leave')).find(x=>x.id===id); l.status='cancelled'; await idbPut('leave',l); await logAction('leave_request_cancelled', { employee_id:l.employee_id, detail:`${leaveLabel(l.type)} ${l.start_date} to ${l.end_date}` }); toast('Request cancelled'); navigate('my-leave'); }
