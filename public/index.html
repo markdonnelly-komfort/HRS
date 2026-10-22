@@ -661,6 +661,8 @@ async function handleLogin(e){
   if (!user){ await logAction('login_failed', { username:u }); toast('Invalid username or password','error'); return; }
   const hash = await sha256(p);
   if (hash !== user.password_hash){ await logAction('login_failed', { username:u }); toast('Invalid username or password','error'); return; }
+  const ends = leaverAccessEnds(user.employee_id ? await idbGet('employees', user.employee_id) : null);
+  if (ends && today() > ends){ await logAction('login_blocked', { username:u, detail:`Leaver access ended ${ends}` }); toast(`Your access ended on ${fmtDate(ends)}. Please contact HR if you need anything.`,'error'); return; }
   state.user = user;
   sessionStorage.setItem('hr_session', user.id);
   await logAction('login');
@@ -671,18 +673,34 @@ async function enterApp(){
   document.getElementById('login-view').style.display = 'none';
   document.getElementById('app').classList.add('active');
   await refreshCaches();
+  const me = empById(state.user.employee_id), ends = leaverAccessEnds(me);
+  state.leaver = ends ? { ends, left: me.end_date } : null;
   document.getElementById('who-name').textContent = state.user.full_name;
-  document.getElementById('who-role').textContent = roleLabel(state.user.role);
+  document.getElementById('who-role').textContent = state.leaver ? `Leaver · access until ${fmtDate(ends)}` : roleLabel(state.user.role);
   buildNav();
-  const start = state.user.role === 'employee' ? 'my-profile' : 'dashboard';
+  const start = state.user.role === 'employee' || state.leaver ? 'my-profile' : 'dashboard';
   navigate(start);
 }
 
 function roleLabel(r){ return ({hr_admin:'HR Admin', manager:'Manager', employee:'Employee'})[r] || r; }
 
+// ── Leavers ──
+// Someone marked as a leaver keeps a cut-down login (payslips/P45, contact
+// details, training certificates, holiday record) for 90 days after their end
+// date, then sign-in is blocked. HR can set a different date on the record.
+const LEAVER_ACCESS_DAYS = 90;
+function leaverAccessEnds(e){
+  if (!e || e.status!=='leaver') return null;
+  return e.leaver_access_until || addDays(e.end_date || (e.updated_at||nowISO()).slice(0,10), LEAVER_ACCESS_DAYS);
+}
+function leaverAccessText(e){
+  const ends = leaverAccessEnds(e); if (!ends) return '';
+  return today() > ends ? `Sign-in ended ${fmtDate(ends)}` : `Can sign in until ${fmtDate(ends)}`;
+}
+
 function logout(){
   if (state.user) logAction('logout');
-  state.user = null;
+  state.user = null; state.leaver = null;
   sessionStorage.removeItem('hr_session');
   document.getElementById('app').classList.remove('active');
   document.getElementById('login-view').style.display = 'flex';
@@ -701,6 +719,14 @@ async function refreshCaches(){
 // NAVIGATION
 // ═══════════════════════════════════════════════
 const NAV = {
+  // Cut-down menu for leavers during their access period
+  leaver: [
+    { id:'my-profile',    label:'My Profile',       ic:'☺' },
+    { id:'my-payslips',   label:'My Payslips',      ic:'£', badge:'newPayDocs' },
+    { id:'my-leave',      label:'My Holiday',       ic:'✈' },
+    { id:'my-training',   label:'My Training',      ic:'✪' },
+    { id:'my-signatures', label:'Documents to Sign',ic:'✍', badge:'docsToSign' }
+  ],
   hr_admin: [
     { id:'dashboard',     label:'Dashboard',        ic:'▦' },
     { id:'announcements', label:'Announcements',    ic:'✉' },
@@ -763,7 +789,7 @@ const NAV = {
 
 async function buildNav(){
   const nav = document.getElementById('nav');
-  const items = NAV[state.user.role] || [];
+  const items = state.leaver ? NAV.leaver : (NAV[state.user.role] || []);
   const badges = await computeBadges();
   nav.innerHTML = items.map(i => `
     <div class="nav-item" data-page="${i.id}" onclick="navigate('${i.id}')">
@@ -828,6 +854,7 @@ function canManageEmp(id){ return state.user.role==='hr_admin' || (state.user.ro
 const PAGE_TITLES = { dashboard:'Dashboard', employees:'Employees', team:'My Team', leave: state=>'', performance:'Performance', documents:'Documents', reports:'Reports', tasks:'Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-performance':'My Performance' };
 
 async function navigate(page){
+  if (state.leaver && !NAV.leaver.some(i=>i.id===page)) page = 'my-profile';
   state.page = page;
   window._detailEmp = null;
   document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.page === page));
@@ -1318,6 +1345,7 @@ function empTabEmployment(body, id){
     <dt>Length of service</dt><dd>${serviceYM(e.start_date)}</dd>
     <dt>Probation ends</dt><dd>${e.probation_end_date?fmtDate(e.probation_end_date)+(e.probation_end_date>=today()&&e.probation_end_date<=addDays(today(),45)?' <span class="badge b-amber">Review due</span>':(e.probation_end_date<today()?' <span class="badge b-grey">Passed</span>':'')):'—'}</dd>
     <dt>End date</dt><dd>${fmtDate(e.end_date)}</dd>
+    ${e.status==='leaver'?`<dt>Leaver sign-in</dt><dd>${esc(leaverAccessText(e))}${Object.values(state.usersById).some(u=>u.employee_id===e.id)?'':' <span class="small muted">(no login account)</span>'}</dd>`:''}
     <dt>Status</dt><dd>${statusBadge(e.status)}</dd>
     ${showSalary?`<dt>Salary</dt><dd>${revealHtml(`${fmtMoney(e.salary)} (${esc(e.pay_frequency)})`)}</dd>
     <dt>Bank sort code</dt><dd>${esc(e.bank_sort_code)||'—'}</dd>
@@ -1484,6 +1512,7 @@ function employeeForm(id){
           <div class="form-group"><label>End date</label><input id="f-end" type="date" value="${esc(e.end_date||'')}"></div>
           <div class="form-group"><label>Status</label><select id="f-status">${[['active','Active'],['on_leave','On leave'],['leaver','Leaver']].map(([v,t])=>`<option value="${v}" ${e.status===v?'selected':''}>${t}</option>`).join('')}</select></div>
         </div>
+        <div class="form-group"><label>Leaver sign-in allowed until</label><input id="f-lacc" type="date" value="${esc(e.leaver_access_until||'')}" style="max-width:220px"><div class="small muted">Leavers can sign in for ${LEAVER_ACCESS_DAYS} days after their end date (payslips, P45, contact details). Set a date here to extend or end that early.</div></div>
         <div class="form-row-3">
           <div class="form-group"><label>Salary (£/yr)</label><input id="f-sal" type="number" value="${e.salary??''}"></div>
           <div class="form-group"><label>Holiday allowance (days)</label><input id="f-hol" type="number" value="${e.holiday_allowance??DEFAULT_ALLOWANCE}"></div>
@@ -1519,7 +1548,7 @@ async function saveEmployee(ev, id){
     job_title: val('f-jt'), department: val('f-dept'), site: val('f-site'),
     manager_id: val('f-mgr')||null, employment_type: val('f-type'),
     working_hours: numVal('f-hours'), notice_period: val('f-notice'),
-    start_date: val('f-start'), end_date: val('f-end')||null, probation_end_date: val('f-prob')||null, status: val('f-status'),
+    start_date: val('f-start'), end_date: val('f-end')||null, probation_end_date: val('f-prob')||null, status: val('f-status'), leaver_access_until: val('f-lacc')||null,
     salary: numVal('f-sal'), pay_frequency: existing?.pay_frequency||'Annual',
     bank_sort_code: val('f-sort'), bank_account: val('f-acct'),
     holiday_allowance: numVal('f-hol') ?? DEFAULT_ALLOWANCE,
@@ -2274,22 +2303,24 @@ function exportTraining(){
 // HR admin uploads; the employee sees their own under "My Payslips".
 // Managers never see another person's pay documents.
 // ═══════════════════════════════════════════════
-const PAY_DOC_TYPES = { payslip:'Payslip', p60:'P60', p11d:'P11D', other:'Other' };
-const PAY_DOC_PLURAL = { payslip:'Payslips', p60:'P60s', p11d:'P11Ds', other:'Other pay documents' };
-const isMonthlyPayDoc = t => t==='payslip' || t==='other';   // P60/P11D are per tax year
+const PAY_DOC_TYPES = { payslip:'Payslip', p45:'P45', p60:'P60', p11d:'P11D', other:'Other' };
+const PAY_DOC_PLURAL = { payslip:'Payslips', p45:'P45s', p60:'P60s', p11d:'P11Ds', other:'Other pay documents' };
+const isMonthlyPayDoc = t => t==='payslip' || t==='other';   // P45/P60/P11D are per tax year
 function payDocPeriodLabel(d){ return isMonthlyPayDoc(d.doc_type) ? monthLabel(d.period) : ('Tax year '+(d.tax_year||'—')); }
 // Same employee + type + month/tax year → a re-upload replaces it ('other' never replaces).
 function samePaySlot(a,b){ return a.doc_type!=='other' && a.employee_id===b.employee_id && a.doc_type===b.doc_type && (a.period||null)===(b.period||null) && (a.tax_year||null)===(b.tax_year||null); }
 function payDocTypeFields(prefix){
   const ty = recentTaxYearLabels();
   return `<div class="form-row-3">
-    <div class="form-group"><label>Document type</label><select id="${prefix}-type" onchange="payDocTypeChanged('${prefix}')">${Object.entries(PAY_DOC_TYPES).map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select></div>
+    <div class="form-group"><label>Document type</label><select id="${prefix}-type" onchange="payDocTypeChanged('${prefix}',true)">${Object.entries(PAY_DOC_TYPES).map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select></div>
     <div class="form-group" id="${prefix}-period-wrap"><label>Pay month</label><input id="${prefix}-period" type="month" value="${today().slice(0,7)}" placeholder="YYYY-MM" onchange="payDocTypeChanged('${prefix}')"></div>
     <div class="form-group" id="${prefix}-ty-wrap" style="display:none"><label>Tax year</label><select id="${prefix}-ty" onchange="payDocTypeChanged('${prefix}')">${ty.map((y,i)=>`<option ${i===1?'selected':''}>${y}</option>`).join('')}</select></div>
   </div>`;
 }
-function payDocTypeChanged(prefix){
+function payDocTypeChanged(prefix, typeChanged){
   const monthly = isMonthlyPayDoc(val(prefix+'-type'));
+  // A P45 belongs to the current tax year; P60s and P11Ds to the one just finished
+  if (typeChanged && !monthly) document.getElementById(prefix+'-ty').selectedIndex = val(prefix+'-type')==='p45' ? 0 : 1;
   document.getElementById(prefix+'-period-wrap').style.display = monthly ? '' : 'none';
   document.getElementById(prefix+'-ty-wrap').style.display = monthly ? 'none' : '';
   if (prefix==='bu') renderBulkMap();
@@ -2314,7 +2345,7 @@ function payDocRow(d, admin){
 }
 function payDocGroups(docs, admin){
   if (!docs.length) return '<div class="empty small">No documents uploaded yet.</div>';
-  return ['payslip','p60','p11d','other'].map(t => {
+  return Object.keys(PAY_DOC_TYPES).map(t => {
     const list = docs.filter(d=>d.doc_type===t).sort((a,b)=> isMonthlyPayDoc(t) ? (b.period||'').localeCompare(a.period||'') : (b.tax_year||'').localeCompare(a.tax_year||''));
     return list.length ? `<h4 style="margin:14px 0 8px">${PAY_DOC_PLURAL[t]}</h4>${list.map(d=>payDocRow(d,admin)).join('')}` : '';
   }).join('');
@@ -3371,6 +3402,7 @@ function sigSigners(r){
 const currentSigner = r => r.status==='pending' ? sigSigners(r).find(s=>s.status==='pending') : null;
 function isMyTurn(r){
   const s = currentSigner(r); if (!s) return false;
+  if (s.role==='manager' && state.leaver) return false;   // a manager who has left no longer signs for their old team
   return s.role==='hr' ? state.user.role==='hr_admin' : !!state.user.employee_id && s.employee_id===state.user.employee_id;
 }
 function canSeeSign(r){
@@ -3885,7 +3917,7 @@ function exportAssets(){
 // AUDIT TRAIL (HR admin)
 // ═══════════════════════════════════════════════
 const AUDIT_LABELS = {
-  login:'Signed in', logout:'Signed out', login_failed:'Failed sign-in', password_change:'Changed own password', password_reset:'Reset a password',
+  login:'Signed in', logout:'Signed out', login_failed:'Failed sign-in', login_blocked:'Sign-in blocked (leaver access ended)', password_change:'Changed own password', password_reset:'Reset a password',
   user_create:'Created login account', user_update:'Updated login account', user_delete:'Deleted login account',
   employee_create:'Added employee', employee_update:'Updated employee', my_details_update:'Updated own contact details',
   contact_save:'Saved emergency contact', contact_delete:'Deleted emergency contact',
@@ -4118,7 +4150,7 @@ async function renderUsers(c){
   setTopbar(`<button class="btn btn-accent" onclick="userForm()">+ New account</button>`);
   c.innerHTML = `<div class="card"><div class="card-head"><h3>Login accounts</h3></div>
     <div class="table-wrap"><table><thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Linked employee</th><th></th></tr></thead><tbody>${
-      users.sort((a,b)=>a.username.localeCompare(b.username)).map(u=>`<tr><td><strong>${esc(u.username)}</strong></td><td>${esc(u.full_name)}</td><td><span class="badge b-blue">${roleLabel(u.role)}</span></td><td>${u.employee_id?esc(empName(u.employee_id)):'—'}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="userForm('${u.id}')">Edit</button> <button class="btn btn-outline btn-sm" onclick="resetPwd('${u.id}')">Reset password</button>${u.username!=='admin'?` <button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}')">×</button>`:''}</td></tr>`).join('')
+      users.sort((a,b)=>a.username.localeCompare(b.username)).map(u=>`<tr><td><strong>${esc(u.username)}</strong></td><td>${esc(u.full_name)}</td><td><span class="badge b-blue">${roleLabel(u.role)}</span>${(()=>{ const e = empById(u.employee_id), ends = leaverAccessEnds(e); return ends ? ` <span class="badge ${today()>ends?'b-grey':'b-amber'}">${today()>ends?'Leaver · sign-in ended':'Leaver · until '+fmtDate(ends)}</span>` : ''; })()}</td><td>${u.employee_id?esc(empName(u.employee_id)):'—'}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="userForm('${u.id}')">Edit</button> <button class="btn btn-outline btn-sm" onclick="resetPwd('${u.id}')">Reset password</button>${u.username!=='admin'?` <button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}')">×</button>`:''}</td></tr>`).join('')
     }</tbody></table></div></div>
     <div class="card"><p class="small muted">Tip: when you add an employee, create them a matching <strong>Employee</strong> account here and link it to their record so they can use the self-service portal.</p></div>`;
 }
@@ -4211,8 +4243,10 @@ async function renderMyProfile(c){
   const jobs = await jobsFor(id);
   const ackCard = (await mySignCardHtml()) + (await myAckCardHtml());
   // Employees land on My Profile, so show the latest announcements here (managers see them on the dashboard)
-  const annHtml = state.user.role==='employee' ? await latestAnnouncementsHtml() : '';
+  const annHtml = state.user.role==='employee' && !state.leaver ? await latestAnnouncementsHtml() : '';
+  const leaverNote = state.leaver ? `<div class="card ack-banner"><strong>You left Komfort${state.leaver.left?` on ${fmtDate(state.leaver.left)}`:''}.</strong> You can still sign in until <strong>${fmtDate(state.leaver.ends)}</strong> to download your payslips and P45, view your holiday and training records, and keep your contact details up to date — anything else we need to send you (such as your P11D) will be posted to the address below.</div>` : '';
   c.innerHTML = `
+    ${leaverNote}
     ${ackCard}
     ${annHtml}
     <div class="card"><div class="detail-head">${avatarHtml(e,true)}<div class="who"><h2>${e.title?esc(e.title)+' ':''}${esc(e.first_name)} ${esc(e.last_name)}${e.is_director?' <span class="badge b-yellow">Director</span>':''}</h2><div class="muted">${esc(e.job_title)} · ${esc(e.department)} · ${esc(e.site)}</div><div class="small muted">${esc(e.employee_number)} · Started ${fmtDate(e.start_date)} (${serviceYM(e.start_date)})${e.manager_id?` · Manager: ${esc(empName(e.manager_id))}`:''}</div></div></div></div>
@@ -4285,17 +4319,18 @@ async function renderMyLeave(c){
   const all = (await idbByIndex('leave','employee_id',id)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
   const holidays = all.filter(l=>l.type==='holiday');
   const adjustments = all.filter(l=>l.type==='adjustment');
-  setTopbar(`<button class="btn btn-accent" onclick="leaveForm(null,true)">+ Book holiday</button>`);
+  const ro = !!state.leaver;   // leavers can view their record but not book or change anything
+  if (!ro) setTopbar(`<button class="btn btn-accent" onclick="leaveForm(null,true)">+ Book holiday</button>`);
   c.innerHTML = balanceTiles(bal, id) + `
-    <div class="card"><div class="card-head"><h3>My holiday</h3><button class="btn btn-accent btn-sm" onclick="leaveForm(null,true)">+ Book holiday</button></div>
+    <div class="card"><div class="card-head"><h3>My holiday</h3>${ro?'':`<button class="btn btn-accent btn-sm" onclick="leaveForm(null,true)">+ Book holiday</button>`}</div>
       ${holidays.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th><th></th></tr></thead><tbody>${
         holidays.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusCell(l)}</td><td class="small">${esc(l.reason)||'—'}${l.cancel_requested&&l.cancel_reason?`<div class="muted">Cancellation reason: ${esc(l.cancel_reason)}</div>`:''}</td><td style="text-align:right;white-space:nowrap">${
-          l.status==='pending' ? `<button class="btn btn-outline btn-sm" onclick="cancelMyLeave('${l.id}')">Cancel</button>`
+          ro ? '' : l.status==='pending' ? `<button class="btn btn-outline btn-sm" onclick="cancelMyLeave('${l.id}')">Cancel</button>`
           : canRequestCancel(l) ? `<button class="btn btn-outline btn-sm" onclick="cancelRequestForm('${l.id}')">Request cancellation</button>`
           : isCancelRequest(l) ? `<button class="btn btn-outline btn-sm" onclick="withdrawCancelRequest('${l.id}')">Withdraw request</button>` : ''
         }</td></tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">No holiday booked yet.</div>'}
-      <p class="small muted" style="margin-top:10px">Need to cancel an approved holiday that hasn't started yet? Use <strong>Request cancellation</strong> — it goes to your manager for approval, and the holiday stays booked until they approve it.</p>
+      <p class="small muted" style="margin-top:10px;${ro?'display:none':''}">Need to cancel an approved holiday that hasn't started yet? Use <strong>Request cancellation</strong> — it goes to your manager for approval, and the holiday stays booked until they approve it.</p>
     </div>
     ${companyDaysCardHtml()}
     ${adjustments.length?`<div class="card"><div class="card-head"><h3>Holiday adjustments</h3></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Change</th><th>Note</th></tr></thead><tbody>${
@@ -4383,7 +4418,12 @@ async function saveMyPassword(ev){
   await openDB();
   await seedDefaults();
   const sid = sessionStorage.getItem('hr_session');
-  if (sid){ const u = await idbGet('users', sid); if (u){ state.user = u; await enterApp(); return; } }
+  if (sid){
+    const u = await idbGet('users', sid);
+    const ends = u?.employee_id ? leaverAccessEnds(await idbGet('employees', u.employee_id)) : null;
+    if (u && !(ends && today() > ends)){ state.user = u; await enterApp(); return; }
+    sessionStorage.removeItem('hr_session');
+  }
 })();
 </script>
 </body>

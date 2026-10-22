@@ -393,7 +393,7 @@ function initializeSchema() {
     CREATE TABLE IF NOT EXISTS pay_documents (
       id TEXT PRIMARY KEY,
       employee_id TEXT NOT NULL REFERENCES employees(id),
-      doc_type TEXT NOT NULL CHECK(doc_type IN ('payslip','p60','p11d','other')),
+      doc_type TEXT NOT NULL CHECK(doc_type IN ('payslip','p45','p60','p11d','other')),
       period TEXT,
       tax_year TEXT,
       file_name TEXT,
