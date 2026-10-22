@@ -124,7 +124,9 @@
     .main { flex: 1; min-width: 0; margin-left: var(--sidebar-w); display: flex; flex-direction: column; min-height: 100vh; }
     .topbar { background: var(--primary-light); color: var(--accent); padding: 14px 22px; display: flex; align-items: center; justify-content: space-between; box-shadow: var(--shadow); position: sticky; top: 0; z-index: 40; border-bottom: 4px solid var(--accent); }
     .topbar h1 { color: var(--accent); font-size: 1.2rem; }
-    .topbar .ta { display: flex; gap: 8px; align-items: center; }
+    .topbar .ta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+    .topbar .btn-outline { border-color: var(--accent); color: var(--accent); }
+    .topbar .btn-outline:hover { background: var(--accent); color: var(--primary); }
     .hamburger { display: none; background: none; border: none; color: var(--accent); font-size: 1.5rem; cursor: pointer; }
     .content { padding: 22px; flex: 1; }
 
@@ -344,8 +346,9 @@ const DB_NAME = 'KomfortHR';
 // v6: job history, one-to-ones, policy read-and-understood confirmations.
 // v7: bank holidays / shutdown days, return-to-work interviews, announcements.
 // v8: e-signature requests.
-const DB_VERSION = 8;
-const STORES = ['users','employees','contacts','documents','leave','reviews','objectives','tasks','audit_log','settings','training','pay_documents','jobs','one_to_ones','doc_acks','company_days','rtw','announcements','sign_requests'];
+// v9: asset / equipment register.
+const DB_VERSION = 9;
+const STORES = ['users','employees','contacts','documents','leave','reviews','objectives','tasks','audit_log','settings','training','pay_documents','jobs','one_to_ones','doc_acks','company_days','rtw','announcements','sign_requests','assets'];
 let db = null;
 
 function openDB() {
@@ -435,6 +438,12 @@ function openDB() {
       }
       if (!d.objectStoreNames.contains('announcements')) {
         d.createObjectStore('announcements', { keyPath: 'id' });
+      }
+      if (!d.objectStoreNames.contains('assets')) {
+        // Each asset holds its current holder (employee_id) plus an issue/return history
+        const s = d.createObjectStore('assets', { keyPath: 'id' });
+        s.createIndex('employee_id', 'employee_id');
+        s.createIndex('status', 'status');
       }
       if (!d.objectStoreNames.contains('sign_requests')) {
         const s = d.createObjectStore('sign_requests', { keyPath: 'id' });
@@ -567,6 +576,18 @@ async function seedDefaults(){
   // Sample announcement
   await idbPut('announcements', { id:uuid(), title:'Christmas shutdown dates', body:'The factory and offices close from Thursday 24 December and reopen on Monday 4 January.\n\n24 December is a free day. 29, 30 and 31 December come out of your holiday allowance, so please keep 3 days back.', audience:'all', pinned:true, expires:null, author:'admin', created_at:nowISO(), updated_at:nowISO() });
 
+  // Sample asset register (Linda has left but still has her phone)
+  const asset = (name, category, tag, serial, holder, issued, extra={}) => idbPut('assets', { id:uuid(), name, category, asset_tag:tag, serial, purchase_date:null, value:null, notes:'',
+    status: holder ? 'issued' : (extra.status||'available'), employee_id: holder||null, issued_date: holder ? issued : null,
+    history: holder ? [{ employee_id:holder, issued_date:issued, condition_out:'Good', notes:'', issued_by:'admin' }] : [], created_at:nowISO(), updated_at:nowISO() });
+  await asset('Dell Latitude 5440', 'Laptop', 'KP-IT-0012', 'DL5440-88231', mgrId, '2024-01-10');
+  await asset('iPhone 14', 'Mobile phone', 'KP-MOB-0031', '', e4, '2023-05-02');
+  await asset('Ford Transit Custom', 'Vehicle', 'KP-VAN-07', 'YK21 ABC', e4, '2021-03-15');
+  await asset('PPE kit (boots, hi-vis, gloves)', 'PPE', '', '', empId, '2021-06-14');
+  await asset('Samsung Galaxy A54', 'Mobile phone', 'KP-MOB-0019', '', e5, '2022-02-01');
+  await asset('Dell Latitude 5440', 'Laptop', 'KP-IT-0015', 'DL5440-90412', null, null);
+  await asset('Makita cordless drill', 'Tools', 'KP-TL-0103', '', null, null, { status:'repair' });
+
   // Sample document waiting for James's e-signature
   const demoPdf = makeDemoPdf('Contract variation - change of hours', ['Employee: James Okafor (KP-014)', 'From 1 January your contracted hours change from 39 to 37.5 per week.', 'All other terms of your contract stay the same.', '', 'Signed for Komfort Partitioning Ltd: HR Department']);
   await idbPut('sign_requests', { id:uuid(), employee_id:empId, title:'Contract variation - change of hours', message:'Please read and sign by the end of the month.', due_date:addDays(today(),10), category:'contract', file:{ data:demoPdf, filename:'contract-variation-james-okafor.pdf', mime_type:'application/pdf' }, file_hash: await sha256Bytes(dataURLtoBytes(demoPdf)), status:'pending', sent_by:'admin', sent_by_name:'System Administrator', sent_at:nowISO(),
@@ -694,6 +715,7 @@ const NAV = {
     { id:'training',      label:'Training',         ic:'✪', badge:'trainingDue' },
     { id:'documents',     label:'Documents',        ic:'▤' },
     { id:'signatures',    label:'E-signatures',     ic:'✍', badge:'sigAwaiting' },
+    { id:'assets',        label:'Assets & Equipment',ic:'⚒', badge:'leaverAssets' },
     { id:'payslip-uploads',label:'Payslip Uploads', ic:'£' },
     { id:'reports',       label:'Reports',          ic:'▣' },
     { id:'tasks',         label:'HR Tasks',         ic:'✔', badge:'openTasks' },
@@ -787,6 +809,8 @@ async function computeBadges(){
     pendingHoliday: pending.filter(l=>l.type==='holiday').length + (state.user.role==='employee' ? 0 : leave.filter(l=>isCancelRequest(l) && canDecideCancel(l)).length),
     sicknessActions: pending.filter(l=>l.type==='sickness').length + rtwDueN,
     newAnnouncements, docsToSign, sigAwaiting,
+    // Equipment still held by leavers (HR)
+    leaverAssets: state.user.role==='hr_admin' ? (await idbByIndex('assets','status','issued')).filter(a => empById(a.employee_id)?.status==='leaver').length : 0,
     pendingOther: pending.filter(l=>OTHER_ABSENCE.includes(l.type)).length,
     openTasks: openTasks.length,
     trainingDue, newPayDocs, oneToOneRequests, docsToAck
@@ -811,7 +835,7 @@ async function navigate(page){
   document.getElementById('sidebar').classList.remove('open');
   await refreshCaches();
   const mgr = state.user.role==='manager';
-  const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', 'leave-holiday':mgr?'Team Holiday':'Holiday', 'leave-sickness':mgr?'Team Sickness':'Sickness', 'leave-other':mgr?'Team Absences':'Other Absences', performance:mgr?'Team Performance':'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: mgr?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-sickness':'My Sickness', 'my-other':'My Other Absences', 'my-performance':'My Performance', training: mgr?'Team Training':'Training', 'my-training':'My Training', 'my-payslips':'My Payslips', 'payslip-uploads':'Payslip Uploads', 'org-chart':'Organisation Chart', calendar:'Holiday Calendar', announcements:'Announcements', 'company-days':'Bank Holidays & Shutdowns', audit:'Audit Trail', signatures:'E-signatures', 'my-signatures':'Documents to Sign' };
+  const titles = { dashboard:'Dashboard', employees:'Employees', team:'My Team', 'leave-holiday':mgr?'Team Holiday':'Holiday', 'leave-sickness':mgr?'Team Sickness':'Sickness', 'leave-other':mgr?'Team Absences':'Other Absences', performance:mgr?'Team Performance':'Performance Management', documents: state.user.role==='employee'?'Company Documents':'Documents', reports:'Reports', tasks: mgr?'My Tasks':'HR Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-sickness':'My Sickness', 'my-other':'My Other Absences', 'my-performance':'My Performance', training: mgr?'Team Training':'Training', 'my-training':'My Training', 'my-payslips':'My Payslips', 'payslip-uploads':'Payslip Uploads', 'org-chart':'Organisation Chart', calendar:'Holiday Calendar', announcements:'Announcements', 'company-days':'Bank Holidays & Shutdowns', audit:'Audit Trail', signatures:'E-signatures', 'my-signatures':'Documents to Sign', assets:'Assets & Equipment' };
   document.getElementById('page-title').textContent = titles[page] || page;
   const c = document.getElementById('content');
   c.innerHTML = '<div class="empty">Loading…</div>';
@@ -845,6 +869,7 @@ async function navigate(page){
       case 'audit': if (state.user.role!=='hr_admin') throw new Error('Not permitted'); await renderAudit(c); break;
       case 'signatures': if (state.user.role!=='hr_admin') throw new Error('Not permitted'); await renderSignatures(c); break;
       case 'my-signatures': await renderMySignatures(c); break;
+      case 'assets': if (state.user.role!=='hr_admin') throw new Error('Not permitted'); await renderAssets(c); break;
       default: c.innerHTML = '<div class="empty">Page not found</div>';
     }
   } catch(err){ console.error(err); c.innerHTML = `<div class="empty">Error: ${err.message}</div>`; }
@@ -1222,6 +1247,7 @@ async function employeeDetail(id){
       <div class="tab" onclick="empTab('other',this)">Other absence</div>
       <div class="tab" onclick="empTab('performance',this)">Performance</div>
       <div class="tab" onclick="empTab('training',this)">Training</div>
+      <div class="tab" onclick="empTab('equipment',this)">Equipment</div>
       <div class="tab" onclick="empTab('documents',this)">Documents</div>
       ${canEdit?`<div class="tab" onclick="empTab('payslips',this)">Payslips</div>`:''}
     </div>
@@ -1245,6 +1271,7 @@ function empTab(tab, el){
     other: ()=>empTabOther(body,id),
     performance: ()=>empTabPerformance(body,id),
     training: ()=>empTabTraining(body,id),
+    equipment: ()=>empTabEquipment(body,id),
     documents: ()=>empTabDocuments(body,id),
     payslips: ()=>empTabPayDocs(body,id)
   })[tab]();
@@ -3673,6 +3700,188 @@ async function declineSign(ev, id){
 }
 
 // ═══════════════════════════════════════════════
+// ASSETS & EQUIPMENT
+// ═══════════════════════════════════════════════
+// Register of company equipment. Each asset records its current holder plus
+// a history of every issue and return. HR manages it; managers can see their
+// team's equipment and staff see what's issued to them.
+const ASSET_CATEGORIES = ['Laptop','Desktop / monitor','Mobile phone','Tablet','Vehicle','Fuel card','Keys / fob / access card','Tools','PPE','Uniform','Other'];
+const ASSET_CONDITIONS = ['New','Good','Fair','Damaged'];
+const ASSET_STATUS = { available:['Available','b-green'], issued:['Issued','b-blue'], repair:['In repair','b-amber'], lost:['Lost','b-red'], retired:['Retired','b-grey'] };
+const assetStatusBadge = s => { const [t,c] = ASSET_STATUS[s] || [s,'b-grey']; return `<span class="badge ${c}">${t}</span>`; };
+const assetIdText = a => [a.asset_tag && 'Tag '+a.asset_tag, a.serial && 'S/N '+a.serial].filter(Boolean).join(' · ');
+async function renderAssets(c){
+  const all = (await idbGetAll('assets')).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  window._assetsAll = all;
+  const leaverHeld = all.filter(a => a.status==='issued' && empById(a.employee_id)?.status==='leaver');
+  const n = s => all.filter(a=>a.status===s).length;
+  setTopbar(`<button class="btn btn-outline" onclick="exportAssets()">Export CSV</button> <button class="btn btn-accent" onclick="assetForm()">+ Add asset</button>`);
+  c.innerHTML = `
+    ${leaverHeld.length?`<div class="card ack-banner"><div class="card-head"><h3>Still held by leavers (${leaverHeld.length})</h3></div>${assetTable(leaverHeld)}</div>`:''}
+    <div class="stat-grid">
+      <div class="stat"><div class="num">${all.length}</div><div class="lbl">Assets</div></div>
+      <div class="stat info"><div class="num">${n('issued')}</div><div class="lbl">Issued</div></div>
+      <div class="stat ok"><div class="num">${n('available')}</div><div class="lbl">Available</div></div>
+      <div class="stat warn"><div class="num">${n('repair')}</div><div class="lbl">In repair</div></div>
+      <div class="stat"><div class="num">${n('lost')+n('retired')}</div><div class="lbl">Lost / retired</div></div>
+    </div>
+    <div class="toolbar">
+      <input class="grow" id="as-q" placeholder="Search asset, tag, serial or person…" oninput="filterAssets()">
+      <select id="as-cat" onchange="filterAssets()"><option value="">All categories</option>${ASSET_CATEGORIES.map(x=>`<option>${esc(x)}</option>`).join('')}</select>
+      <select id="as-status" onchange="filterAssets()"><option value="">All statuses</option>${Object.entries(ASSET_STATUS).map(([v,[t]])=>`<option value="${v}">${t}</option>`).join('')}</select>
+    </div>
+    <div class="card" id="asset-list"></div>`;
+  filterAssets();
+}
+function filterAssets(){
+  const q = val('as-q').toLowerCase(), cat = val('as-cat'), st = val('as-status');
+  const list = (window._assetsAll||[]).filter(a => (!cat || a.category===cat) && (!st || a.status===st) &&
+    (!q || `${a.name} ${a.asset_tag||''} ${a.serial||''} ${a.employee_id?empName(a.employee_id):''}`.toLowerCase().includes(q)));
+  document.getElementById('asset-list').innerHTML = assetTable(list, (window._assetsAll||[]).length ? 'No assets match.' : 'No assets recorded yet. Use <strong>Add asset</strong> to start the register.');
+}
+function assetTable(list, empty, showHolder = true){
+  if (!list.length) return `<div class="empty small">${empty||'None.'}</div>`;
+  const hr = state.user.role==='hr_admin';
+  return `<div class="table-wrap"><table><thead><tr><th>Asset</th><th>Category</th><th>Status</th>${showHolder?'<th>Held by</th>':''}<th>Since</th>${hr?'<th></th>':''}</tr></thead><tbody>${
+    list.map(a=>`<tr><td><strong>${esc(a.name)}</strong>${assetIdText(a)?`<div class="small muted">${esc(assetIdText(a))}</div>`:''}</td><td class="small">${esc(a.category)||'—'}</td><td>${assetStatusBadge(a.status)}${a.status==='issued'&&empById(a.employee_id)?.status==='leaver'?' <span class="badge b-red">Leaver</span>':''}</td>${showHolder?`<td>${a.employee_id?esc(empName(a.employee_id)):'—'}</td>`:''}<td class="small">${a.status==='issued'?fmtDate(a.issued_date):'—'}</td>${hr?`<td style="text-align:right;white-space:nowrap">${
+      a.status==='issued' ? `<button class="btn btn-outline btn-sm" onclick="returnAssetForm('${a.id}')">Return</button> ` : a.status==='available' ? `<button class="btn btn-accent btn-sm" onclick="issueAssetForm('${a.id}')">Issue</button> ` : ''
+    }<button class="btn btn-outline btn-sm" onclick="assetForm('${a.id}')">Open</button></td>`:''}</tr>`).join('')
+  }</tbody></table></div>`;
+}
+async function assetForm(id){
+  const a = id ? await idbGet('assets', id) : { category:'Laptop', status:'available' };
+  if (id && !a) return;
+  const issued = a.status==='issued';
+  const history = (a.history||[]).slice().reverse();
+  openModal(`<h2>${id?esc(a.name):'Add asset'}</h2><div class="modal-sub">${id?`${assetStatusBadge(a.status)}${issued?` with <strong>${esc(empName(a.employee_id))}</strong> since ${fmtDate(a.issued_date)}`:''}`:'Add an item to the equipment register'}</div>
+    <form onsubmit="saveAsset(event,'${id||''}')">
+      <div class="form-row">
+        <div class="form-group"><label class="req">Name / description</label><input id="as-name" value="${esc(a.name||'')}" required placeholder="e.g. Dell Latitude 5440"></div>
+        <div class="form-group"><label>Category</label><select id="as-category">${optionList(ASSET_CATEGORIES, a.category)}</select></div>
+      </div>
+      <div class="form-row-3">
+        <div class="form-group"><label>Asset tag</label><input id="as-tag" value="${esc(a.asset_tag||'')}" placeholder="e.g. KP-IT-0042"></div>
+        <div class="form-group"><label>Serial number / reg</label><input id="as-serial" value="${esc(a.serial||'')}"></div>
+        <div class="form-group"><label>Status</label>${issued ? `<input value="Issued" disabled><div class="small muted">Return it to change the status.</div>` : `<select id="as-st">${Object.entries(ASSET_STATUS).filter(([v])=>v!=='issued').map(([v,[t]])=>`<option value="${v}" ${a.status===v?'selected':''}>${t}</option>`).join('')}</select>`}</div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Purchase date</label><input id="as-bought" type="date" value="${esc(a.purchase_date||'')}"></div>
+        <div class="form-group"><label>Value (£)</label><input id="as-value" type="number" step="0.01" min="0" value="${a.value??''}"></div>
+      </div>
+      <div class="form-group"><label>Notes</label><textarea id="as-notes" rows="2">${esc(a.notes||'')}</textarea></div>
+      ${history.length?`<h4 style="margin:6px 0 8px">History</h4><div class="table-wrap"><table><thead><tr><th>Issued to</th><th>Issued</th><th>Returned</th><th>Condition out / in</th><th>Notes</th></tr></thead><tbody>${
+        history.map(h=>`<tr><td>${esc(empName(h.employee_id))}</td><td>${fmtDate(h.issued_date)}</td><td>${h.returned_date?fmtDate(h.returned_date):'<span class="badge b-blue">Still issued</span>'}</td><td class="small">${esc(h.condition_out||'—')} / ${esc(h.condition_in||'—')}</td><td class="small">${esc([h.notes,h.return_notes].filter(Boolean).join(' · '))||'—'}</td></tr>`).join('')
+      }</tbody></table></div>`:''}
+      <div class="modal-actions">${id&&!issued?`<button type="button" class="btn btn-danger" style="margin-right:auto" onclick="deleteAsset('${id}')">Delete</button>`:''}${id&&a.status==='available'?`<button type="button" class="btn btn-accent" onclick="issueAssetForm('${id}')">Issue</button>`:''}${issued?`<button type="button" class="btn btn-outline" onclick="returnAssetForm('${id}')">Return</button>`:''}<button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
+    </form>`, true);
+}
+async function saveAsset(ev, id){
+  ev.preventDefault();
+  const existing = id ? await idbGet('assets', id) : null;
+  const rec = { ...(existing||{ history:[], employee_id:null, issued_date:null }), id: id||uuid(), name: val('as-name'), category: val('as-category'), asset_tag: val('as-tag'), serial: val('as-serial'),
+    purchase_date: val('as-bought')||null, value: numVal('as-value'), notes: val('as-notes'),
+    status: existing?.status==='issued' ? 'issued' : (val('as-st')||'available'), created_at: existing?.created_at||nowISO(), updated_at: nowISO() };
+  await idbPut('assets', rec);
+  await logAction(id?'asset_update':'asset_create', { detail: rec.name + (rec.asset_tag?` (${rec.asset_tag})`:'') });
+  closeModal(); toast(id?'Asset saved':'Asset added'); refreshAssetViews();
+}
+async function deleteAsset(id){
+  const a = await idbGet('assets', id); if (!a || a.status==='issued') return;
+  if (!confirm(`Delete ${a.name} from the register? Its history will be lost. (To keep the history, set the status to Retired instead.)`)) return;
+  await idbDelete('assets', id); await logAction('asset_delete', { detail: a.name });
+  closeModal(); toast('Asset deleted'); refreshAssetViews();
+}
+function refreshAssetViews(){ if (window._detailEmp && refreshEmpTab()) return; navigate(state.page); }
+// Issue: either a chosen asset to a person, or (from an employee record) any available asset to that person
+async function issueAssetForm(assetId, presetEmp){
+  const available = (await idbByIndex('assets','status','available')).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  if (!assetId && !available.length){ toast('No available assets — add one to the register first','info'); return; }
+  const a = assetId ? await idbGet('assets', assetId) : null;
+  const people = state.employees.filter(e=>e.status!=='leaver').sort((x,y)=>(x.last_name||'').localeCompare(y.last_name||''));
+  openModal(`<h2>Issue equipment</h2><div class="modal-sub">${a?esc(a.name)+(assetIdText(a)?' · '+esc(assetIdText(a)):''):esc(empName(presetEmp))}</div>
+    <form onsubmit="issueAsset(event)">
+      ${a ? `<input type="hidden" id="ai-asset" value="${a.id}">` : `<div class="form-group"><label class="req">Asset</label><select id="ai-asset" required><option value="">Select…</option>${available.map(x=>`<option value="${x.id}">${esc(x.name)}${x.asset_tag?' ('+esc(x.asset_tag)+')':''} — ${esc(x.category)}</option>`).join('')}</select></div>`}
+      ${presetEmp ? `<input type="hidden" id="ai-emp" value="${presetEmp}">` : `<div class="form-group"><label class="req">Issue to</label><select id="ai-emp" required><option value="">Select…</option>${people.map(e=>`<option value="${e.id}">${esc(e.first_name+' '+e.last_name)}</option>`).join('')}</select></div>`}
+      <div class="form-row">
+        <div class="form-group"><label class="req">Date issued</label><input id="ai-date" type="date" value="${today()}" required></div>
+        <div class="form-group"><label>Condition</label><select id="ai-cond">${optionList(ASSET_CONDITIONS, 'Good')}</select></div>
+      </div>
+      <div class="form-group"><label>Notes</label><input id="ai-notes" placeholder="e.g. with charger and case"></div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Issue</button></div>
+    </form>`);
+}
+async function issueAsset(ev){
+  ev.preventDefault();
+  const a = await idbGet('assets', val('ai-asset')), empId = val('ai-emp');
+  if (!a || !empId){ toast('Choose an asset and a person','error'); return; }
+  if (a.status!=='available'){ toast('That asset is not available','error'); return; }
+  a.history = a.history || [];
+  a.history.push({ employee_id:empId, issued_date:val('ai-date'), condition_out:val('ai-cond'), notes:val('ai-notes'), issued_by:state.user.username });
+  Object.assign(a, { status:'issued', employee_id:empId, issued_date:val('ai-date'), updated_at:nowISO() });
+  await idbPut('assets', a);
+  await logAction('asset_issue', { employee_id:empId, detail:a.name + (a.asset_tag?` (${a.asset_tag})`:'') });
+  closeModal(); toast(`Issued to ${empName(empId)}`); refreshAssetViews();
+}
+async function returnAssetForm(id){
+  const a = await idbGet('assets', id); if (!a || a.status!=='issued') return;
+  openModal(`<h2>Return equipment</h2><div class="modal-sub">${esc(a.name)} · from ${esc(empName(a.employee_id))}, issued ${fmtDate(a.issued_date)}</div>
+    <form onsubmit="returnAsset(event,'${id}')">
+      <div class="form-row">
+        <div class="form-group"><label class="req">Date returned</label><input id="ar-date" type="date" value="${today()}" required></div>
+        <div class="form-group"><label>Condition</label><select id="ar-cond" onchange="document.getElementById('ar-next').value = this.value==='Not returned (lost)' ? 'lost' : this.value==='Damaged' ? 'repair' : 'available'">${optionList(['Good','Fair','Damaged','Not returned (lost)'], 'Good')}</select></div>
+      </div>
+      <div class="form-group"><label>Status after return</label><select id="ar-next">${Object.entries(ASSET_STATUS).filter(([v])=>v!=='issued').map(([v,[t]])=>`<option value="${v}">${t}</option>`).join('')}</select></div>
+      <div class="form-group"><label>Notes</label><input id="ar-notes"></div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Record return</button></div>
+    </form>`);
+}
+async function returnAsset(ev, id){
+  ev.preventDefault();
+  const a = await idbGet('assets', id); if (!a || a.status!=='issued') return;
+  const date = val('ar-date');
+  if (a.issued_date && date < a.issued_date){ toast('Return date is before it was issued','error'); return; }
+  const h = (a.history||[]).slice().reverse().find(x=>x.employee_id===a.employee_id && !x.returned_date);
+  if (h) Object.assign(h, { returned_date:date, condition_in:val('ar-cond'), return_notes:val('ar-notes'), returned_by:state.user.username });
+  const from = a.employee_id;
+  Object.assign(a, { status: val('ar-next'), employee_id:null, issued_date:null, updated_at:nowISO() });
+  await idbPut('assets', a);
+  await logAction('asset_return', { employee_id:from, detail:`${a.name}${a.asset_tag?` (${a.asset_tag})`:''} - ${val('ar-cond').toLowerCase()}` });
+  closeModal(); toast('Return recorded'); refreshAssetViews();
+}
+// Everything a person holds now, plus what they've had in the past
+async function assetsForEmployee(empId){
+  const all = await idbGetAll('assets');
+  const current = all.filter(a=>a.status==='issued' && a.employee_id===empId);
+  const past = [];
+  all.forEach(a => (a.history||[]).forEach(h => { if (h.employee_id===empId && h.returned_date) past.push({ a, h }); }));
+  past.sort((x,y)=>(y.h.returned_date||'').localeCompare(x.h.returned_date||''));
+  return { current, past };
+}
+async function empTabEquipment(body, id){
+  const hr = state.user.role==='hr_admin';
+  const { current, past } = await assetsForEmployee(id);
+  const leaver = empById(id)?.status==='leaver';
+  body.innerHTML = `<div class="card"><div class="card-head"><h3>Equipment issued (${current.length})</h3>${hr?`<button class="btn btn-accent btn-sm" onclick="issueAssetForm(null,'${id}')">+ Issue equipment</button>`:''}</div>
+      ${leaver && current.length ? '<p class="small" style="color:var(--danger);margin-bottom:10px"><strong>This person has left but still has equipment.</strong> Record each item as returned once it has been collected.</p>' : ''}
+      ${assetTable(current, 'No equipment issued.', false)}
+    </div>
+    ${past.length?`<div class="card"><div class="card-head"><h3>Previously held</h3></div><div class="table-wrap"><table><thead><tr><th>Asset</th><th>Issued</th><th>Returned</th><th>Condition in</th></tr></thead><tbody>${
+      past.map(({a,h})=>`<tr><td>${esc(a.name)}${assetIdText(a)?`<div class="small muted">${esc(assetIdText(a))}</div>`:''}</td><td>${fmtDate(h.issued_date)}</td><td>${fmtDate(h.returned_date)}</td><td class="small">${esc(h.condition_in||'—')}</td></tr>`).join('')
+    }</tbody></table></div></div>`:''}`;
+}
+async function myEquipmentCardHtml(){
+  if (!state.user.employee_id) return '';
+  const { current } = await assetsForEmployee(state.user.employee_id);
+  if (!current.length) return '';
+  return `<div class="card"><div class="card-head"><h3>My equipment</h3><span class="small muted">Company property issued to you</span></div>${assetTable(current, '', false)}</div>`;
+}
+function exportAssets(){
+  const rows = [['Asset','Category','Asset tag','Serial / reg','Status','Held by','Issued','Purchase date','Value','Notes']];
+  (window._assetsAll||[]).forEach(a => rows.push([a.name, a.category, a.asset_tag||'', a.serial||'', (ASSET_STATUS[a.status]||[a.status])[0], a.employee_id?empName(a.employee_id):'', a.issued_date||'', a.purchase_date||'', a.value??'', a.notes||'']));
+  downloadCSV('komfort-assets.csv', rows);
+}
+
+// ═══════════════════════════════════════════════
 // AUDIT TRAIL (HR admin)
 // ═══════════════════════════════════════════════
 const AUDIT_LABELS = {
@@ -3690,6 +3899,7 @@ const AUDIT_LABELS = {
   document_upload:'Uploaded document', document_view:'Viewed document', document_update:'Updated document', document_delete:'Deleted document', document_download:'Downloaded document', document_open:'Opened document', document_acknowledged:'Confirmed read & understood',
   training_create:'Added training record', training_update:'Updated training record', training_delete:'Deleted training record', pay_document_upload:'Uploaded pay document', pay_document_open:'Opened pay document', pay_document_delete:'Deleted pay document', pay_documents_bulk_upload:'Bulk uploaded pay documents',
   sign_request_send:'Sent document for signature', sign_request_cancel:'Cancelled signature request', sign_request_viewed:'Opened document to sign', document_signed:'Signed document electronically', document_sign_declined:'Declined to sign document',
+  asset_create:'Added asset', asset_update:'Updated asset', asset_delete:'Deleted asset', asset_issue:'Issued equipment', asset_return:'Recorded equipment return',
   announcement_post:'Posted announcement', announcement_update:'Edited announcement', announcement_delete:'Deleted announcement',
   task_create:'Created task', task_update:'Updated task', task_complete:'Completed task', task_reopen:'Reopened task', task_delete:'Deleted task',
   settings_update:'Changed settings', seed:'System set up'
@@ -4020,6 +4230,7 @@ async function renderMyProfile(c){
       </dl>
     </div>
     <div class="card"><div class="card-head"><h3>My job history</h3></div>${jobHistoryTable(e, jobs, false)}</div>
+    ${await myEquipmentCardHtml()}
     <div class="card"><div class="card-head"><h3>Emergency contacts</h3><button class="btn btn-accent btn-sm" onclick="myContactForm()">+ Add contact</button></div>
       ${contacts.length?contacts.map(ct=>`<div class="doc-row"><div class="dic">☎</div><div class="di"><div class="t">${esc(ct.name)} <span class="small muted">(${esc(ct.relationship)})</span></div><div class="small muted">${esc(ct.phone)}${ct.email?` · ${esc(ct.email)}`:''}</div>${ct.address?`<div class="small muted">${esc(ct.address)}</div>`:''}</div><button class="btn btn-danger btn-sm" onclick="deleteMyContact('${ct.id}')">×</button></div>`).join(''):'<div class="empty small">No emergency contacts. Please add one.</div>'}
     </div>

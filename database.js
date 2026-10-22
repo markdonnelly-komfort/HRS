@@ -247,6 +247,41 @@ function initializeSchema() {
     )
   `);
   db.run('CREATE INDEX IF NOT EXISTS idx_sign_requests_emp ON sign_requests(employee_id)');
+  // Asset / equipment register and its issue/return history
+  db.run(`
+    CREATE TABLE IF NOT EXISTS assets (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      category TEXT,
+      asset_tag TEXT,
+      serial TEXT,
+      purchase_date TEXT,
+      value REAL,
+      notes TEXT,
+      status TEXT NOT NULL DEFAULT 'available' CHECK(status IN ('available','issued','repair','lost','retired')),
+      employee_id TEXT REFERENCES employees(id),
+      issued_date TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
+    )
+  `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS asset_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      asset_id TEXT NOT NULL REFERENCES assets(id),
+      employee_id TEXT NOT NULL REFERENCES employees(id),
+      issued_date TEXT,
+      condition_out TEXT,
+      notes TEXT,
+      issued_by TEXT,
+      returned_date TEXT,
+      condition_in TEXT,
+      return_notes TEXT,
+      returned_by TEXT
+    )
+  `);
+  db.run('CREATE INDEX IF NOT EXISTS idx_assets_emp ON assets(employee_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_asset_history_asset ON asset_history(asset_id)');
   db.run(`
     CREATE TABLE IF NOT EXISTS announcements (
       id TEXT PRIMARY KEY,
