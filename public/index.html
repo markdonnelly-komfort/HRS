@@ -992,7 +992,9 @@ async function leaveBalance(employeeId){
     + shutdownDays.filter(c => c.date <= today()).length;
   // Only BOOKED (approved) holiday is deducted from remaining; pending is shown
   // separately and does NOT reduce the balance until it's approved/booked.
-  return { allowance, adjustments, entitlement, booked, shutdown, taken, pending, remaining: entitlement - booked, bounds };
+  // Upcoming = approved holiday still to come; taken + upcoming = everything booked
+  const upcoming = booked - taken, upcomingShutdown = shutdownDays.filter(c => c.date > today()).length;
+  return { allowance, adjustments, entitlement, booked, shutdown, upcomingShutdown, taken, upcoming, pending, remaining: entitlement - booked, bounds };
 }
 // Days of a booking already taken (on or before today). A booking that's under
 // way counts the working days so far, never more than the days booked.
@@ -1009,7 +1011,7 @@ function balanceTiles(bal, empId){
   return `<div class="stat-grid">
       <div class="stat"><div class="num">${bal.entitlement}</div><div class="lbl">Entitlement (${bal.bounds.label})${bal.adjustments?` · ${bal.allowance}+${bal.adjustments}`:''}</div></div>
       <div ${tk}><div class="num">${bal.taken}</div><div class="lbl">Taken so far</div></div>
-      <div ${bk}><div class="num">${bal.booked}</div><div class="lbl">Booked (taken + upcoming)${bal.shutdown?` · incl. ${bal.shutdown} shutdown`:''}</div></div>
+      <div ${bk}><div class="num">${bal.upcoming}</div><div class="lbl">Booked (upcoming)${bal.upcomingShutdown?` · incl. ${bal.upcomingShutdown} shutdown`:''}</div></div>
       <div ${pd}><div class="num">${bal.pending}</div><div class="lbl">Pending approval</div></div>
       <div class="stat ok"><div class="num">${bal.remaining}</div><div class="lbl">Remaining</div></div>
     </div>`;
@@ -1021,10 +1023,13 @@ async function openHolidayList(empId, kind){
   let list = (kind==='pending' ? rows.filter(l=>l.status==='pending') : rows.filter(l=>l.status==='approved'));
   // Shutdown days that use holiday show alongside bookings
   if (kind!=='pending') list = list.concat(deductingShutdownDays(empById(empId), bounds).map(c=>({ start_date:c.date, end_date:c.date, days:1, reason:`${c.name} (company shutdown)` })));
-  // Taken: only what's on or before today (a booking under way shows the days so far)
-  if (kind==='taken') list = list.filter(l=>l.start_date<=today()).map(l=>({ ...l, days: takenPortion(l), reason: (l.reason||'') + (l.end_date>today() ? `${l.reason?' · ':''}${l.days} booked, still on holiday` : '') }));
+  // Taken = on or before today; Booked = still to come. A holiday that's under
+  // way is split: days so far count as taken, the rest as booked.
+  const part = (l, d) => d === Number(l.days) ? l : { ...l, days: d, reason: (l.reason||'') + `${l.reason?' · ':''}part of ${l.days}-day booking` };
+  if (kind==='taken') list = list.filter(l=>l.start_date<=today()).map(l=>part(l, takenPortion(l)));
+  if (kind==='booked') list = list.filter(l=>l.end_date>today()).map(l=>part(l, (Number(l.days)||0) - takenPortion(l)));
   list.sort((a,b)=>a.start_date.localeCompare(b.start_date));
-  const label = { taken:'Holiday taken so far', booked:'Booked holiday', pending:'Pending holiday' }[kind];
+  const label = { taken:'Holiday taken so far', booked:'Booked — upcoming holiday', pending:'Pending holiday' }[kind];
   const body = list.length ? `<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Reason</th></tr></thead><tbody>${list.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty small">None.</div>';
   openModal(`<h2>${label} — ${esc(empName(empId))}</h2><div class="modal-sub">${bounds.label}</div><div>${body}</div><div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Close</button></div>`);
 }
@@ -4070,7 +4075,7 @@ async function renderReports(c){
     </div>
 
     <div class="card"><div class="card-head"><h3>Annual leave balances</h3><button class="btn btn-outline btn-sm" onclick="exportLeaveBalances()">Export CSV</button></div>
-      <div class="table-wrap"><table id="rep-leave"><thead><tr><th>Employee</th><th>Site</th><th>Allowance</th><th>Adj</th><th>Entitlement</th><th>Taken</th><th>Booked</th><th>Pending</th><th>Remaining</th></tr></thead><tbody><tr><td colspan="9" class="muted">Loading…</td></tr></tbody></table></div>
+      <div class="table-wrap"><table id="rep-leave"><thead><tr><th>Employee</th><th>Site</th><th>Allowance</th><th>Adj</th><th>Entitlement</th><th>Taken</th><th>Booked (upcoming)</th><th>Pending</th><th>Remaining</th></tr></thead><tbody><tr><td colspan="9" class="muted">Loading…</td></tr></tbody></table></div>
     </div>
 
     <div class="card"><div class="card-head"><h3>Current employees</h3><button class="btn btn-outline btn-sm" onclick="exportHeadcount()">Export CSV</button></div>
@@ -4084,7 +4089,7 @@ async function renderReports(c){
   const rows = [];
   for (const e of active.sort((a,b)=>a.last_name.localeCompare(b.last_name))){
     const b = await leaveBalance(e.id);
-    rows.push(`<tr><td>${esc(e.first_name+' '+e.last_name)}</td><td>${esc(e.site)}</td><td>${b.allowance}</td><td>${b.adjustments?(b.adjustments>0?'+':'')+b.adjustments:'—'}</td><td>${b.entitlement}</td><td>${b.taken}</td><td>${b.booked}</td><td>${b.pending}</td><td><strong>${b.remaining}</strong></td></tr>`);
+    rows.push(`<tr><td>${esc(e.first_name+' '+e.last_name)}</td><td>${esc(e.site)}</td><td>${b.allowance}</td><td>${b.adjustments?(b.adjustments>0?'+':'')+b.adjustments:'—'}</td><td>${b.entitlement}</td><td>${b.taken}</td><td>${b.upcoming}</td><td>${b.pending}</td><td><strong>${b.remaining}</strong></td></tr>`);
   }
   tb.innerHTML = rows.join('') || '<tr><td colspan="9" class="muted">—</td></tr>';
 }
@@ -4095,8 +4100,8 @@ function exportHeadcount(){
   downloadCSV('komfort-headcount.csv', rows);
 }
 async function exportLeaveBalances(){
-  const rows = [['Employee','Site','Allowance','Adjustments','Entitlement','Taken','Booked','Pending','Remaining']];
-  for (const e of state.employees.filter(x=>x.status==='active')){ const b=await leaveBalance(e.id); rows.push([e.first_name+' '+e.last_name,e.site,b.allowance,b.adjustments,b.entitlement,b.taken,b.booked,b.pending,b.remaining]); }
+  const rows = [['Employee','Site','Allowance','Adjustments','Entitlement','Taken','Booked (upcoming)','Pending','Remaining']];
+  for (const e of state.employees.filter(x=>x.status==='active')){ const b=await leaveBalance(e.id); rows.push([e.first_name+' '+e.last_name,e.site,b.allowance,b.adjustments,b.entitlement,b.taken,b.upcoming,b.pending,b.remaining]); }
   downloadCSV('komfort-leave-balances.csv', rows);
 }
 async function exportAbsence(){
