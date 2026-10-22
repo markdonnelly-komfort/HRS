@@ -1375,6 +1375,7 @@ async function empTabLeave(body, id){
   const holidays = all.filter(l=>l.type==='holiday');
   const adjustments = all.filter(l=>l.type==='adjustment');
   const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id));
+  const canAdjust = state.user.role==='hr_admin';   // entitlement adjustments are HR only
   const act = l => canManage ? `<td style="text-align:right;white-space:nowrap">${l.status==='pending'?`<button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')" title="Approve / book">Book</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button>`:isCancelRequest(l)?cancelDecisionButtons(l):`<button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button>`}</td>` : '';
   const leaveTable = (list,empty) => list.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
       list.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusCell(l)}</td><td class="small">${esc(l.reason)||'—'}${isCancelRequest(l)&&l.cancel_reason?`<div class="muted">Cancellation reason: ${esc(l.cancel_reason)}</div>`:''}</td>${act(l)}</tr>`).join('')
@@ -1383,10 +1384,10 @@ async function empTabLeave(body, id){
     <div class="card"><div class="card-head"><h3>Holiday bookings</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="leaveForm('${id}',false,'holiday')">+ Add holiday</button>`:''}</div>
       ${leaveTable(holidays,'No holiday booked.')}
     </div>
-    <div class="card"><div class="card-head"><h3>Adjustments</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="adjustmentForm('${id}')">+ Add adjustment</button>`:''}</div>
+    <div class="card"><div class="card-head"><h3>Adjustments</h3>${canAdjust?`<button class="btn btn-accent btn-sm" onclick="adjustmentForm('${id}')">+ Add adjustment</button>`:''}</div>
       <p class="small muted" style="margin-bottom:10px">Manual tweaks to entitlement (e.g. worked an extra day → +1). Base allowance ${bal.allowance} ${bal.adjustments>=0?'+':'−'} ${Math.abs(bal.adjustments)} adjustment${Math.abs(bal.adjustments)!==1?'s':''} = <strong>${bal.entitlement} days</strong> entitlement.</p>
-      ${adjustments.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Change</th><th>Note</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
-        adjustments.map(a=>`<tr><td>${fmtDate(a.start_date)}</td><td><strong>${a.days>=0?'+':''}${a.days} day${Math.abs(a.days)!==1?'s':''}</strong></td><td class="small">${esc(a.reason)||'—'}</td>${canManage?`<td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="deleteLeave('${a.id}')">Delete</button></td>`:''}</tr>`).join('')
+      ${adjustments.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Change</th><th>Note</th>${canAdjust?'<th></th>':''}</tr></thead><tbody>${
+        adjustments.map(a=>`<tr><td>${fmtDate(a.start_date)}</td><td><strong>${a.days>=0?'+':''}${a.days} day${Math.abs(a.days)!==1?'s':''}</strong></td><td class="small">${esc(a.reason)||'—'}</td>${canAdjust?`<td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="deleteLeave('${a.id}')">Delete</button></td>`:''}</tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">No adjustments recorded.</div>'}
     </div>`;
 }
@@ -1761,7 +1762,7 @@ async function decideLeave(id, decision){
   toast('Leave '+decision);
   refreshLeaveViews();
 }
-async function deleteLeave(id){ if(!confirm('Delete this leave record?'))return; const l=await idbGet('leave',id); await idbDelete('leave',id); await logAction('leave_delete', { employee_id:l?.employee_id, detail: l?`${leaveLabel(l.type)} ${l.start_date} to ${l.end_date} (${l.days} days)`:'' }); toast('Deleted'); refreshLeaveViews(); }
+async function deleteLeave(id){ const l=await idbGet('leave',id); if (l?.type==='adjustment' && state.user.role!=='hr_admin'){ toast('Only HR can change holiday adjustments','error'); return; } if(!confirm('Delete this leave record?'))return; await idbDelete('leave',id); await logAction('leave_delete', { employee_id:l?.employee_id, detail: l?`${leaveLabel(l.type)} ${l.start_date} to ${l.end_date} (${l.days} days)`:'' }); toast('Deleted'); refreshLeaveViews(); }
 
 // ── Cancellation of approved, not-yet-started holiday ──
 // The booking stays "approved" (and counts against the balance) until the
@@ -1881,6 +1882,7 @@ async function saveLeave(ev, isSelf){
 }
 // ── Holiday adjustments ──
 function adjustmentForm(empId){
+  if (state.user.role!=='hr_admin'){ toast('Only HR can adjust holiday entitlement','error'); return; }
   openModal(`<h2>Add holiday adjustment</h2><div class="modal-sub">${esc(empName(empId))}</div>
     <form onsubmit="saveAdjustment(event,'${empId}')">
       <div class="form-row">
@@ -1893,6 +1895,7 @@ function adjustmentForm(empId){
 }
 async function saveAdjustment(ev, empId){
   ev.preventDefault();
+  if (state.user.role!=='hr_admin'){ toast('Only HR can adjust holiday entitlement','error'); return; }
   const days = Number(val('aj-days'))||0;
   if (!days){ toast('Enter a non-zero number of days','error'); return; }
   const date = val('aj-date')||today();
