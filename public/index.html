@@ -1137,6 +1137,11 @@ async function renderDashboard(c){
   const rtwDue = leave.filter(l => isRtwDue(l, rtwDone) && canManageEmp(l.employee_id));
   const closedToday = state.companyDays.find(d => d.date===today());
   const annHtml = await latestAnnouncementsHtml();
+  // Managers: team holiday in the next 30 days (booked or awaiting approval, including anyone off now)
+  const soonEnd = addDays(today(), 30);
+  const teamHols = isMgr ? leave.filter(l => l.type==='holiday' && ['approved','pending'].includes(l.status) && l.start_date<=soonEnd && l.end_date>=today() && teamMemberIds().includes(l.employee_id))
+    .sort((a,b)=>a.start_date.localeCompare(b.start_date) || empName(a.employee_id).localeCompare(empName(b.employee_id))) : [];
+  const whenText = l => l.start_date<=today() ? '<span class="badge b-blue">Off now</span>' : (n => n===1 ? 'Tomorrow' : `In ${n} days`)(Math.round((new Date(l.start_date)-new Date(today()))/86400000));
 
   c.innerHTML = `
     ${closedToday?`<div class="card ack-banner"><strong>Today is ${closedToday.kind==='bank_holiday'?'a bank holiday':'a shutdown day'}: ${esc(closedToday.name)}.</strong></div>`:''}
@@ -1187,6 +1192,13 @@ async function renderDashboard(c){
       <div class="table-wrap"><table><thead><tr><th>Document</th><th>Confirmed</th><th style="width:30%"></th><th>Deadline</th><th></th></tr></thead><tbody>${
         ackOutstanding.map(d=>{ const c=ackC[d.id]; return `<tr><td>${esc(d.title)}</td><td>${c.done} of ${c.total}</td><td><div class="progress"><div style="width:${c.total?Math.round(c.done/c.total*100):0}%"></div></div></td><td>${d.ack_deadline?fmtDate(d.ack_deadline)+(d.ack_deadline<today()?' <span class="badge b-red">Overdue</span>':''):'—'}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="ackStatus('${d.id}')">Who's read it</button></td></tr>`; }).join('')
       }</tbody></table></div>
+    </div>`:''}
+
+    ${isMgr?`<div class="card">
+      <div class="card-head"><h3>Team holiday — next 30 days (${teamHols.length})</h3><button class="btn btn-outline btn-sm" onclick="navigate('calendar')">Holiday Calendar</button></div>
+      ${teamHols.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>When</th></tr></thead><tbody>${
+        teamHols.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${l.status==='pending'?'<span class="badge b-amber">Awaiting approval</span>':'<span class="badge b-green">Booked</span>'}</td><td class="small">${whenText(l)}</td></tr>`).join('')
+      }</tbody></table></div>`:'<div class="empty small">No team holiday in the next 30 days.</div>'}
     </div>`:''}
 
     <div class="form-row">
