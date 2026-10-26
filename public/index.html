@@ -183,6 +183,9 @@
     .doc-row { flex-wrap: wrap; }
     .doc-row .doc-btns { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
     .ack-banner { border-left: 5px solid var(--accent); background: #fffbea; }
+    .hr-note { padding: 12px 0; border-bottom: 1px solid var(--border); }
+    .hr-note:last-child { border-bottom: 0; }
+    .hr-note-text { white-space: pre-wrap; margin-top: 4px; overflow-wrap: anywhere; }
     .card-slim { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 20px; }
     .card-slim h3 { font-size: 1rem; margin: 0; }
     .viewer-frame { width: 100%; height: 70vh; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
@@ -362,8 +365,9 @@ const DB_NAME = 'KomfortHR';
 // v8: e-signature requests.
 // v9: asset / equipment register.
 // v10: saved custom reports (report builder).
-const DB_VERSION = 10;
-const STORES = ['users','employees','contacts','documents','leave','reviews','objectives','tasks','audit_log','settings','training','pay_documents','jobs','one_to_ones','doc_acks','company_days','rtw','announcements','sign_requests','assets','saved_reports'];
+// v11: HR notes & reminders.
+const DB_VERSION = 11;
+const STORES = ['users','employees','contacts','documents','leave','reviews','objectives','tasks','audit_log','settings','training','pay_documents','jobs','one_to_ones','doc_acks','company_days','rtw','announcements','sign_requests','assets','saved_reports','hr_notes'];
 let db = null;
 
 function openDB() {
@@ -394,6 +398,8 @@ function openDB() {
       // are in it, so badges can find them without loading every stored file.
       const docStore = e.target.transaction.objectStore('documents');
       if (!docStore.indexNames.contains('ack')) docStore.createIndex('ack', 'ack');
+      // Sparse index on review dates so the HR dashboard can find policies due for review cheaply
+      if (!docStore.indexNames.contains('review_date')) docStore.createIndex('review_date', 'review_date');
       if (!d.objectStoreNames.contains('leave')) {
         const s = d.createObjectStore('leave', { keyPath: 'id' });
         s.createIndex('employee_id', 'employee_id');
@@ -453,6 +459,10 @@ function openDB() {
       }
       if (!d.objectStoreNames.contains('announcements')) {
         d.createObjectStore('announcements', { keyPath: 'id' });
+      }
+      if (!d.objectStoreNames.contains('hr_notes')) {
+        const s = d.createObjectStore('hr_notes', { keyPath: 'id' });
+        s.createIndex('employee_id', 'employee_id');
       }
       if (!d.objectStoreNames.contains('saved_reports')) {
         d.createObjectStore('saved_reports', { keyPath: 'id' });
@@ -522,7 +532,14 @@ const LEAVE_TYPES = {
 const OTHER_ABSENCE = Object.keys(LEAVE_TYPES).filter(k => !['holiday','sickness','adjustment'].includes(k));
 const leaveLabel = t => LEAVE_TYPES[t]?.label || t;
 const leaveBadge = t => `<span class="badge ${LEAVE_TYPES[t]?.colour||'b-grey'}">${esc(leaveLabel(t))}</span>`;
+const sickTag = l => l.sickness_type ? `<span class="badge b-grey">${esc(l.sickness_type)}</span> ` : '';
+const rolesHtml = e => (e?.workplace_roles||[]).map(r=>`<span class="badge b-green">${esc(r)}</span>`).join(' ');
 const EMPLOYMENT_TYPES = ['Permanent','Contract','Casual'];
+// Sickness categories and reasons for leaving (same lists Komfort uses in Breathe)
+const SICKNESS_TYPES = ['Headache / migraine','Digestive / stomach','Cough, cold, flu','Psychiatric / stress','Work related injury','Non-work related injury','Other'];
+const LEAVING_REASONS = ['Career change','Career progression','Change of personal circumstances','Death','Dismissal','Dissatisfaction','End of contract','Monetary','Mutual agreement','Performance related','Personal','Personal conflicts','Retired','Redundancy','Resigned','TUPE','Unsuccessful probation','Unknown','Other'];
+// Workplace responsibilities shown on the Organisation Chart (per site)
+const WORKPLACE_ROLES = ['First aider','Mental health first aider','Fire warden','Key holder','Health & safety officer'];
 // Demo seed only — HR imports/maintains the real list on the Bank Holidays & Shutdowns page
 const BANK_HOLIDAYS_EW = [
   ['2026-01-01',"New Year's Day"],['2026-04-03','Good Friday'],['2026-04-06','Easter Monday'],['2026-05-04','Early May bank holiday'],
@@ -561,6 +578,7 @@ async function seedDefaults(){
     address_line1:o.a1||'', address_line2:'', city:o.city||'', postcode:o.pc||'',
     personal_email:o.pe||'', work_email:o.we, mobile_phone:o.mob||'', home_phone:'',
     work_phone:o.wp||'', work_mobile:o.wm||'', is_director:!!o.dir,
+    workplace_roles:o.roles||[], leaving_reason:o.lr||null,
     job_title:o.jt, department:o.dept, site:o.site, manager_id:o.mgr||null,
     employment_type:o.type||'Permanent', working_hours:o.hours??37.5, notice_period:o.notice||'1 month',
     start_date:o.start, end_date:o.end||null, probation_end_date:o.prob||null,
@@ -570,11 +588,11 @@ async function seedDefaults(){
     photo:null, notes:'', created_at:nowISO(), updated_at:nowISO()
   });
   const emps = [
-    mk(mgrId,{ttl:'Mrs',num:'KP-001',fn:'Sarah',ln:'Mitchell',dob:'1980-04-12',g:'Female',ni:'AB123456C',a1:'14 Mill Lane',city:'Leeds',pc:'LS10 1AB',we:'s.mitchell@komfort.com',pe:'sarah.m@gmail.com',mob:'07700 900111',wp:'0113 496 0101',wm:'07700 900901',jt:'Operations Manager',dept:'Management',site:'Leeds',type:'Permanent',hours:39,notice:'3 months',start:'2015-03-01',sal:62000,hol:28}),
-    mk(empId,{ttl:'Mr',num:'KP-014',fn:'James',ln:'Okafor',dob:'1992-09-23',g:'Male',ni:'CD654321B',a1:'5 Beech Road',city:'Leeds',pc:'LS11 4QT',we:'j.okafor@komfort.com',pe:'jokafor@outlook.com',mob:'07700 900222',jt:'Production Operative',dept:'Manufacturing',site:'Leeds',mgr:mgrId,type:'Permanent',hours:39,notice:'1 month',start:'2021-06-14',sal:31000,hol:25}),
+    mk(mgrId,{ttl:'Mrs',num:'KP-001',fn:'Sarah',ln:'Mitchell',dob:'1980-04-12',g:'Female',ni:'AB123456C',a1:'14 Mill Lane',city:'Leeds',pc:'LS10 1AB',we:'s.mitchell@komfort.com',pe:'sarah.m@gmail.com',mob:'07700 900111',wp:'0113 496 0101',wm:'07700 900901',roles:['Fire warden','Key holder'],jt:'Operations Manager',dept:'Management',site:'Leeds',type:'Permanent',hours:39,notice:'3 months',start:'2015-03-01',sal:62000,hol:28}),
+    mk(empId,{ttl:'Mr',num:'KP-014',fn:'James',ln:'Okafor',dob:'1992-09-23',g:'Male',ni:'CD654321B',a1:'5 Beech Road',city:'Leeds',pc:'LS11 4QT',we:'j.okafor@komfort.com',pe:'jokafor@outlook.com',mob:'07700 900222',roles:['First aider','Mental health first aider'],jt:'Production Operative',dept:'Manufacturing',site:'Leeds',mgr:mgrId,type:'Permanent',hours:39,notice:'1 month',start:'2021-06-14',sal:31000,hol:25}),
     mk(e3,{ttl:'Ms',num:'KP-022',fn:'Priya',ln:'Sharma',dob:'1995-01-30',g:'Female',ni:'EF112233A',a1:'88 Oak Avenue',city:'Crawley',pc:'RH10 8GH',we:'p.sharma@komfort.com',mob:'07700 900333',jt:'Sales Executive',dept:'Sales',site:'Crawley',mgr:mgrId,type:'Contract',hours:37.5,notice:'1 month',start:addDays(today(),-160),prob:addDays(today(),20),sal:34000,hol:25}),
-    mk(e4,{ttl:'Mr',num:'KP-009',fn:'David',ln:'Thompson',dob:'1975-11-05',g:'Male',ni:'GH445566D',a1:'3 Station Close',city:'Leeds',pc:'LS9 7RR',we:'d.thompson@komfort.com',mob:'07700 900444',wm:'07700 900944',jt:'Senior Installer',dept:'Installation',site:'Axcess-10',mgr:mgrId,type:'Permanent',hours:42,notice:'1 month',start:'2018-08-13',sal:38000,hol:26}),
-    mk(e5,{ttl:'Mrs',num:'KP-005',fn:'Linda',ln:'Carter',dob:'1988-07-19',g:'Female',ni:'IJ778899E',a1:'21 Elmwood Drive',city:'Leeds',pc:'LS12 2AA',we:'l.carter@komfort.com',mob:'07700 900555',jt:'Finance Assistant',dept:'Finance',site:'Leeds',mgr:mgrId,type:'Casual',hours:22.5,notice:'1 week',start:'2019-10-01',end:'2025-12-31',status:'leaver',sal:29000,hol:20})
+    mk(e4,{ttl:'Mr',num:'KP-009',fn:'David',ln:'Thompson',dob:'1975-11-05',g:'Male',ni:'GH445566D',a1:'3 Station Close',city:'Leeds',pc:'LS9 7RR',we:'d.thompson@komfort.com',mob:'07700 900444',wm:'07700 900944',roles:['First aider'],jt:'Senior Installer',dept:'Installation',site:'Axcess-10',mgr:mgrId,type:'Permanent',hours:42,notice:'1 month',start:'2018-08-13',sal:38000,hol:26}),
+    mk(e5,{ttl:'Mrs',num:'KP-005',fn:'Linda',ln:'Carter',dob:'1988-07-19',g:'Female',ni:'IJ778899E',a1:'21 Elmwood Drive',city:'Leeds',pc:'LS12 2AA',we:'l.carter@komfort.com',mob:'07700 900555',jt:'Finance Assistant',dept:'Finance',site:'Leeds',mgr:mgrId,type:'Casual',hours:22.5,notice:'1 week',start:'2019-10-01',end:'2025-12-31',lr:'Resigned',status:'leaver',sal:29000,hol:20})
   ];
   for (const e of emps) await idbPut('employees', e);
 
@@ -593,6 +611,9 @@ async function seedDefaults(){
 
   // Sample announcement
   await idbPut('announcements', { id:uuid(), title:'Christmas shutdown dates', body:'The factory and offices close from Thursday 24 December and reopen on Monday 4 January.\n\n24 December is a free day. 29, 30 and 31 December come out of your holiday allowance, so please keep 3 days back.', audience:'all', pinned:true, expires:null, author:'admin', created_at:nowISO(), updated_at:nowISO() });
+
+  // Sample HR note with a reminder that's due
+  await idbPut('hr_notes', { id:uuid(), employee_id:e3, text:'Probation going well. Check in with Sarah before the end-of-probation meeting and confirm whether to pass.', reminder_date:today(), reminder_done:false, created_by:'admin', created_by_name:'System Administrator', created_at:nowISO() });
 
   // Sample asset register (Linda has left but still has her phone)
   const asset = (name, category, tag, serial, holder, issued, extra={}) => idbPut('assets', { id:uuid(), name, category, asset_tag:tag, serial, purchase_date:null, value:null, notes:'',
@@ -614,9 +635,9 @@ async function seedDefaults(){
   // Sample leave
   await idbPut('leave', { id:uuid(), employee_id:empId, type:'holiday', start_date:thisYear()+'-08-04', end_date:thisYear()+'-08-08', days:5, half_day:false, status:'approved', reason:'Summer holiday', requested_at:nowISO(), decided_by:'manager', decided_at:nowISO(), decision_note:'' });
   await idbPut('leave', { id:uuid(), employee_id:empId, type:'holiday', start_date:thisYear()+'-12-22', end_date:thisYear()+'-12-23', days:2, half_day:false, status:'pending', reason:'Christmas', requested_at:nowISO(), decided_by:null, decided_at:null, decision_note:'' });
-  await idbPut('leave', { id:uuid(), employee_id:empId, type:'sickness', start_date:thisYear()+'-03-10', end_date:thisYear()+'-03-11', days:2, half_day:false, status:'approved', reason:'Flu', requested_at:nowISO(), decided_by:'admin', decided_at:nowISO(), decision_note:'Self-certified' });
+  await idbPut('leave', { id:uuid(), employee_id:empId, type:'sickness', start_date:thisYear()+'-03-10', end_date:thisYear()+'-03-11', days:2, half_day:false, status:'approved', reason:'Flu', sickness_type:'Cough, cold, flu', requested_at:nowISO(), decided_by:'admin', decided_at:nowISO(), decision_note:'Self-certified' });
   // Recent sickness with no return-to-work interview yet
-  await idbPut('leave', { id:uuid(), employee_id:e4, type:'sickness', start_date:addDays(today(),-8), end_date:addDays(today(),-7), days:workingDays(addDays(today(),-8),addDays(today(),-7)), half_day:false, status:'approved', reason:'Back pain', requested_at:nowISO(), decided_by:'manager', decided_at:nowISO(), decision_note:'' });
+  await idbPut('leave', { id:uuid(), employee_id:e4, type:'sickness', start_date:addDays(today(),-8), end_date:addDays(today(),-7), days:workingDays(addDays(today(),-8),addDays(today(),-7)), half_day:false, status:'approved', reason:'Back pain', sickness_type:'Non-work related injury', requested_at:nowISO(), decided_by:'manager', decided_at:nowISO(), decision_note:'' });
   await idbPut('leave', { id:uuid(), employee_id:e3, type:'holiday', start_date:thisYear()+'-07-01', end_date:thisYear()+'-07-04', days:4, half_day:false, status:'approved', reason:'', requested_at:nowISO(), decided_by:'manager', decided_at:nowISO(), decision_note:'' });
   // A few entries close to today so the team calendar has something to show
   await idbPut('leave', { id:uuid(), employee_id:e3, type:'holiday', start_date:addDays(today(),8), end_date:addDays(today(),10), days:workingDays(addDays(today(),8),addDays(today(),10)), half_day:false, status:'approved', reason:'Long weekend', requested_at:nowISO(), decided_by:'manager', decided_at:nowISO(), decision_note:'' });
@@ -731,6 +752,10 @@ async function refreshCaches(){
   state.usersById = {}; users.forEach(u => state.usersById[u.id] = u);
   state.companyDays = (await idbGetAll('company_days')).sort((a,b)=>a.date.localeCompare(b.date));
   state.closedDays = new Set(state.companyDays.map(c=>c.date));
+  // Saved manager permissions merged over the defaults (so new areas get their default)
+  const saved = await getSetting('mgr_perms', null), defs = mgrPermDefaults();
+  if (saved) Object.keys(defs).forEach(k => { if (saved[k]) Object.keys(defs[k]).forEach(a => { if (defs[k][a]!==null && typeof saved[k][a]==='boolean') defs[k][a] = saved[k][a]; }); });
+  state.mgrPerms = defs;
 }
 
 // ═══════════════════════════════════════════════
@@ -806,9 +831,11 @@ const NAV = {
   ]
 };
 
+const TEAM_PAGE_AREA = { 'leave-holiday':'holiday', 'leave-sickness':'sickness', 'leave-other':'other', performance:'performance', training:'training' };
 async function buildNav(){
   const nav = document.getElementById('nav');
-  const items = state.leaver ? NAV.leaver : (NAV[state.user.role] || []);
+  // Managers only see team pages their permissions allow
+  const items = state.leaver ? NAV.leaver : (NAV[state.user.role] || []).filter(i => !TEAM_PAGE_AREA[i.id] || state.user.role!=='manager' || mgrCan(TEAM_PAGE_AREA[i.id],'view'));
   const badges = await computeBadges();
   if (!state.user) return;   // signed out while the badges were loading
   nav.innerHTML = items.map(i => `
@@ -851,7 +878,7 @@ async function computeBadgesFor(){
   const docsToAck = state.user.employee_id ? (await outstandingAcks(state.user.employee_id)).length : 0;
   // Return-to-work interviews the user should hold
   const rtwDone = state.user.role==='employee' ? null : new Set((await idbGetAll('rtw')).map(r=>r.leave_id));
-  const rtwDueN = rtwDone ? leave.filter(l => isRtwDue(l, rtwDone) && canManageEmp(l.employee_id)).length : 0;
+  const rtwDueN = rtwDone ? leave.filter(l => isRtwDue(l, rtwDone) && canDo(l.employee_id,'sickness')).length : 0;
   // Announcements published since this user last opened the board
   const newAnnouncements = (await visibleAnnouncements()).filter(a => isNewAnnouncement(a)).length;
   // E-signatures waiting for this person's signature (HR: waiting for an HR countersignature)
@@ -877,10 +904,37 @@ function teamMemberIds(){
 // HR admin can manage anyone; a manager can manage their direct reports.
 function canManageEmp(id){ return state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id)); }
 
+// ── What line managers can see and do (HR sets this in Settings) ──
+// null = that action doesn't apply to the area. Defaults match Komfort's Breathe setup:
+// managers view and manage absence, training, performance and equipment, but never delete.
+const MGR_AREAS = [
+  ['personal',    'Personal details',                        { view:true,  manage:null,  delete:null  }],
+  ['jobs',        'Job history',                             { view:true,  manage:null,  delete:null  }],
+  ['contacts',    'Emergency contacts',                      { view:true,  manage:null,  delete:null  }],
+  ['holiday',     'Holiday',                                 { view:true,  manage:true,  delete:false }],
+  ['sickness',    'Sickness & return to work',               { view:true,  manage:true,  delete:false }],
+  ['other',       'Other absence',                           { view:true,  manage:true,  delete:false }],
+  ['performance', 'Performance (reviews, objectives, one-to-ones)', { view:true, manage:true, delete:false }],
+  ['training',    'Training',                                { view:true,  manage:true,  delete:false }],
+  ['equipment',   'Equipment',                               { view:true,  manage:true,  delete:null  }],
+  ['documents',   'Employee documents',                      { view:false, manage:null,  delete:null  }]
+];
+function mgrPermDefaults(){ const o = {}; MGR_AREAS.forEach(([k,,d]) => o[k] = { ...d }); return o; }
+// Can the signed-in person do this for one of their team? HR can always; employees never.
+function mgrCan(area, action = 'view'){
+  if (state.user?.role==='hr_admin') return true;
+  if (state.user?.role!=='manager') return false;
+  const p = (state.mgrPerms || mgrPermDefaults())[area];
+  return !!(p && p[action]);
+}
+// Manager-or-HR rights over a specific employee for an area
+const canDo = (empId, area, action = 'manage') => state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(empId) && mgrCan(area, action));
+
 const PAGE_TITLES = { dashboard:'Dashboard', employees:'Employees', team:'My Team', leave: state=>'', performance:'Performance', documents:'Documents', reports:'Reports', tasks:'Tasks', users:'User Accounts', settings:'Settings', 'my-profile':'My Profile', 'my-leave':'My Holiday', 'my-performance':'My Performance' };
 
 async function navigate(page){
   if (state.leaver && !NAV.leaver.some(i=>i.id===page)) page = 'my-profile';
+  if (state.user?.role==='manager' && TEAM_PAGE_AREA[page] && !mgrCan(TEAM_PAGE_AREA[page],'view')) page = 'dashboard';
   state.page = page;
   window._detailEmp = null;
   document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.page === page));
@@ -1136,9 +1190,12 @@ async function renderDashboard(c){
   const ackOutstanding = tracked.filter(d => ackC[d.id].done < ackC[d.id].total);
   const myAcks = (await mySignCardHtml()) + (await myAckCardHtml());
   const rtwDone = await rtwDoneSet();
-  const rtwDue = leave.filter(l => isRtwDue(l, rtwDone) && canManageEmp(l.employee_id));
+  const rtwDue = leave.filter(l => isRtwDue(l, rtwDone) && canDo(l.employee_id,'sickness'));
   const closedToday = state.companyDays.find(d => d.date===today());
   const annHtml = await latestAnnouncementsHtml();
+  const reminders = await hrRemindersDue();
+  // Company documents due for review in the next 30 days (HR)
+  const reviewDue = isMgr ? [] : await new Promise(res => { const r = tx('documents').index('review_date').getAll(IDBKeyRange.upperBound(addDays(today(),30))); r.onsuccess = () => res(r.result.filter(d=>!d.employee_id).sort((a,b)=>a.review_date.localeCompare(b.review_date))); r.onerror = () => res([]); });
   // Managers: team holiday in the next 30 days (booked or awaiting approval, including anyone off now)
   const soonEnd = addDays(today(), 30);
   const teamHols = isMgr ? leave.filter(l => l.type==='holiday' && ['approved','pending'].includes(l.status) && l.start_date<=soonEnd && l.end_date>=today() && teamMemberIds().includes(l.employee_id))
@@ -1164,6 +1221,20 @@ async function renderDashboard(c){
         pending.slice(0,6).map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${leaveBadge(l.type)}</td><td>${fmtDate(l.start_date)} – ${fmtDate(l.end_date)}</td><td>${l.days}</td><td style="text-align:right"><button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')">Approve</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button></td></tr>`).join('')
       }</tbody></table></div>
     </div>` : `<div class="card card-slim"><h3>Pending leave approvals</h3><span class="small muted">✓ Nothing waiting for approval</span></div>`}
+
+    ${reminders.length?`<div class="card ack-banner">
+      <div class="card-head"><h3>Reminders due (${reminders.length})</h3><span class="small muted">From HR notes</span></div>
+      <div class="table-wrap"><table><thead><tr><th>Employee</th><th>Due</th><th>Note</th><th></th></tr></thead><tbody>${
+        reminders.map(n=>`<tr><td><a href="#" onclick="event.preventDefault();openEmpTab('${n.employee_id}','notes')">${esc(empName(n.employee_id))}</a></td><td>${fmtDate(n.reminder_date)}${n.reminder_date<today()?' <span class="badge b-red">Overdue</span>':''}</td><td class="small">${esc(n.text.length>140?n.text.slice(0,140)+'…':n.text)}</td><td style="text-align:right;white-space:nowrap"><button class="btn btn-outline btn-sm" onclick="doneHrNote('${n.id}')">Done</button></td></tr>`).join('')
+      }</tbody></table></div>
+    </div>`:''}
+
+    ${reviewDue.length?`<div class="card">
+      <div class="card-head"><h3>Documents due for review (${reviewDue.length})</h3><button class="btn btn-outline btn-sm" onclick="navigate('documents')">Documents</button></div>
+      <div class="table-wrap"><table><thead><tr><th>Document</th><th>For</th><th>Review</th><th></th></tr></thead><tbody>${
+        reviewDue.map(d=>`<tr><td>${esc(d.title)}</td><td class="small">${esc(docAudienceLabel(d))}</td><td>${reviewBadge(d)}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="docEditForm('${d.id}')">Edit</button></td></tr>`).join('')
+      }</tbody></table></div>
+    </div>`:''}
 
     ${isMgr?`<div class="card">
       <div class="card-head"><h3>Team holiday — next 30 days (${teamHols.length})</h3><button class="btn btn-outline btn-sm" onclick="navigate('calendar')">Holiday Calendar</button></div>
@@ -1251,10 +1322,10 @@ async function openDashList(kind){
     const total = list.reduce((a,l)=>a+l.days,0);
     title = `Sickness — ${total} day${total!==1?'s':''} (${bounds.label})`;
     html = tableWrap('<th>Employee</th><th>From</th><th>To</th><th>Days</th><th>Reason</th>',
-      list.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td></tr>`).join(''), 'No sickness recorded this year.');
+      list.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${sickTag(l)}${esc(l.reason)||'—'}</td></tr>`).join(''), 'No sickness recorded this year.');
   } else if (kind==='rtw'){
     const done = await rtwDoneSet();
-    const list = (await idbGetAll('leave')).filter(l=>isRtwDue(l, done) && canManageEmp(l.employee_id)).sort((a,b)=>a.end_date.localeCompare(b.end_date));
+    const list = (await idbGetAll('leave')).filter(l=>isRtwDue(l, done) && canDo(l.employee_id,'sickness')).sort((a,b)=>a.end_date.localeCompare(b.end_date));
     title = `Return-to-work interviews due (${list.length})`;
     html = tableWrap('<th>Employee</th><th>Off sick</th><th>Days</th><th>Reason</th><th></th>',
       list.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${fmtDate(l.start_date)}${l.end_date!==l.start_date?' – '+fmtDate(l.end_date):''}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td><td style="text-align:right"><button class="btn btn-accent btn-sm" onclick="closeModal();rtwForm('${l.id}')">Return to work</button></td></tr>`).join(''), `Nothing due — interviews are flagged for sickness that ended in the last ${RTW_DUE_WINDOW} days.`);
@@ -1345,24 +1416,22 @@ async function employeeDetail(id){
         </div>
       </div>
     </div>
-    <div class="tabs" id="emp-tabs">
-      <div class="tab active" onclick="empTab('personal',this)">Personal</div>
-      <div class="tab" onclick="empTab('employment',this)">Employment</div>
-      <div class="tab" onclick="empTab('jobs',this)">Job history</div>
-      <div class="tab" onclick="empTab('contacts',this)">Emergency contacts</div>
-      <div class="tab" onclick="empTab('leave',this)">Holiday</div>
-      <div class="tab" onclick="empTab('sickness',this)">Sickness</div>
-      <div class="tab" onclick="empTab('other',this)">Other absence</div>
-      <div class="tab" onclick="empTab('performance',this)">Performance</div>
-      <div class="tab" onclick="empTab('training',this)">Training</div>
-      <div class="tab" onclick="empTab('equipment',this)">Equipment</div>
-      <div class="tab" onclick="empTab('documents',this)">Documents</div>
-      ${canEdit?`<div class="tab" onclick="empTab('payslips',this)">Payslips</div>`:''}
-    </div>
+    <div class="tabs" id="emp-tabs">${
+      // Tabs a manager sees follow the line-manager permissions; HR sees everything
+      [['personal','Personal','personal'],['employment','Employment',null],['jobs','Job history','jobs'],['contacts','Emergency contacts','contacts'],
+       ['leave','Holiday','holiday'],['sickness','Sickness','sickness'],['other','Other absence','other'],['performance','Performance','performance'],
+       ['training','Training','training'],['equipment','Equipment','equipment'],['documents','Documents','documents'],
+       ...(canEdit?[['notes','HR notes',null],['payslips','Payslips',null]]:[])]
+      .filter(([,,area]) => !area || mgrCan(area,'view'))
+      .map(([k,t]) => `<div class="tab" data-tab="${k}" onclick="empTab('${k}',this)">${t}</div>`).join('')
+    }</div>
     <div id="emp-tab-body"></div>`;
   window._detailEmp = id;
-  empTab('personal', document.querySelector('#emp-tabs .tab'));
+  const first = document.querySelector('#emp-tabs .tab');
+  empTab(first.dataset.tab, first);
 }
+// Open an employee record straight onto one tab (e.g. from a dashboard link)
+async function openEmpTab(id, tab){ await employeeDetail(id); const el = document.querySelector(`#emp-tabs .tab[data-tab="${tab}"]`); if (el) empTab(tab, el); }
 function empTab(tab, el){
   window._activeEmpTab = tab;
   document.querySelectorAll('#emp-tabs .tab').forEach(t=>t.classList.remove('active'));
@@ -1381,7 +1450,8 @@ function empTab(tab, el){
     training: ()=>empTabTraining(body,id),
     equipment: ()=>empTabEquipment(body,id),
     documents: ()=>empTabDocuments(body,id),
-    payslips: ()=>empTabPayDocs(body,id)
+    payslips: ()=>empTabPayDocs(body,id),
+    notes: ()=>empTabNotes(body,id)
   })[tab]();
 }
 // Re-render whichever employee-detail tab is currently active (after a save/delete).
@@ -1417,6 +1487,7 @@ function empTabEmployment(body, id){
     <dt>Site</dt><dd>${esc(e.site)}</dd>
     <dt>Manager</dt><dd>${e.manager_id?esc(empName(e.manager_id)):'—'}</dd>
     <dt>Director</dt><dd>${e.is_director?'Yes':'No'}</dd>
+    <dt>Workplace roles</dt><dd>${rolesHtml(e)||'—'}</dd>
     <dt>Work phone</dt><dd>${phoneLink(e.work_phone)}</dd>
     <dt>Work mobile</dt><dd>${phoneLink(e.work_mobile)}</dd>
     <dt>Employment type</dt><dd>${esc(e.employment_type)||'—'}</dd>
@@ -1426,6 +1497,7 @@ function empTabEmployment(body, id){
     <dt>Length of service</dt><dd>${serviceYM(e.start_date)}</dd>
     <dt>Probation ends</dt><dd>${e.probation_end_date?fmtDate(e.probation_end_date)+(e.probation_end_date>=today()&&e.probation_end_date<=addDays(today(),45)?' <span class="badge b-amber">Review due</span>':(e.probation_end_date<today()?' <span class="badge b-grey">Passed</span>':'')):'—'}</dd>
     <dt>End date</dt><dd>${fmtDate(e.end_date)}</dd>
+    ${e.status==='leaver'?`<dt>Reason for leaving</dt><dd>${esc(e.leaving_reason)||'—'}</dd>`:''}
     ${e.status==='leaver'?`<dt>Leaver sign-in</dt><dd>${esc(leaverAccessText(e))}${Object.values(state.usersById).some(u=>u.employee_id===e.id)?'':' <span class="small muted">(no login account)</span>'}</dd>`:''}
     <dt>Status</dt><dd>${statusBadge(e.status)}</dd>
     ${showSalary?`<dt>Salary</dt><dd>${revealHtml(`${fmtMoney(e.salary)} (${esc(e.pay_frequency)})`)}</dd>
@@ -1448,9 +1520,9 @@ async function empTabLeave(body, id){
   const all = (await idbByIndex('leave','employee_id',id)).filter(inYr).sort((a,b)=>b.start_date.localeCompare(a.start_date));
   const holidays = all.filter(l=>l.type==='holiday');
   const adjustments = all.filter(l=>l.type==='adjustment');
-  const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id));
+  const canManage = canDo(id,'holiday'), canDel = canDo(id,'holiday','delete');
   const canAdjust = state.user.role==='hr_admin';   // entitlement adjustments are HR only
-  const act = l => canManage ? `<td style="text-align:right;white-space:nowrap">${l.status==='pending'?`<button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')" title="Approve / book">Book</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button>`:isCancelRequest(l)?cancelDecisionButtons(l):`<button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button>`}</td>` : '';
+  const act = l => canManage ? `<td style="text-align:right;white-space:nowrap">${l.status==='pending'?`<button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')" title="Approve / book">Book</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button>`:isCancelRequest(l)?cancelDecisionButtons(l):(canDel?`<button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button>`:'')}</td>` : '';
   const leaveTable = (list,empty) => list.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
       list.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusCell(l)}</td><td class="small">${esc(l.reason)||'—'}${isCancelRequest(l)&&l.cancel_reason?`<div class="muted">Cancellation reason: ${esc(l.cancel_reason)}</div>`:''}</td>${act(l)}</tr>`).join('')
     }</tbody></table></div>`:`<div class="empty small">${empty}</div>`;
@@ -1482,13 +1554,13 @@ function setAbsencePeriod(k){ window._absPeriod = k; refreshLeaveViews(); }
 async function empTabOther(body, id){
   const per = await absencePeriod();
   const other = (await idbByIndex('leave','employee_id',id)).filter(l=>OTHER_ABSENCE.includes(l.type) && per.inPeriod(l)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
-  const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id));
+  const canManage = canDo(id,'other'), canDel = canDo(id,'other','delete');
   const days = other.filter(l=>l.status==='approved').reduce((a,l)=>a+(Number(l.days)||0),0);
   body.innerHTML = per.html + `
     <div class="card"><div class="card-head"><h3>Other absence <span class="small muted">· ${esc(per.label)} · ${days} day${days!==1?'s':''}</span></h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="leaveForm('${id}',false,'unpaid')">+ Record absence</button>`:''}</div>
       <p class="small muted" style="margin-bottom:10px">Maternity, paternity, compassionate, jury service, medical appointments, unpaid leave and other non-holiday absence.</p>
       ${other.length?`<div class="table-wrap"><table><thead><tr><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
-        other.map(l=>`<tr><td>${leaveBadge(l.type)}</td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td>${canManage?`<td style="text-align:right;white-space:nowrap">${l.status==='pending'?`<button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')">Book</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button>`:`<button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button>`}</td>`:''}</tr>`).join('')
+        other.map(l=>`<tr><td>${leaveBadge(l.type)}</td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusBadge(l.status)}</td><td class="small">${esc(l.reason)||'—'}</td>${canManage?`<td style="text-align:right;white-space:nowrap">${l.status==='pending'?`<button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')">Book</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button>`:(canDel?`<button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button>`:'')}</td>`:''}</tr>`).join('')
       }</tbody></table></div>`:`<div class="empty small">No other absence recorded${per.bounds?' in '+esc(per.label):''}.</div>`}
     </div>`;
 }
@@ -1497,7 +1569,7 @@ async function empTabSickness(body, id){
   const everything = (await idbByIndex('leave','employee_id',id)).filter(l=>l.type==='sickness');
   const all = everything.filter(per.inPeriod).sort((a,b)=>b.start_date.localeCompare(a.start_date));
   const totalDays = all.reduce((a,l)=>a+(Number(l.days)||0),0);
-  const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id));
+  const canManage = canDo(id,'sickness'), canDel = canDo(id,'sickness','delete');
   const bf = bradford(id, everything);   // always the last 52 weeks, whatever period is shown
   const done = await rtwDoneSet();
   body.innerHTML = per.html + `
@@ -1508,14 +1580,14 @@ async function empTabSickness(body, id){
     </div>
     <div class="card"><div class="card-head"><h3>Sickness absence</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="leaveForm('${id}',false,'sickness')">+ Record sickness</button>`:''}</div>
       ${all.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Reason / notes</th><th>Return to work</th>${canManage?'<th></th>':''}</tr></thead><tbody>${
-        all.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td><td style="white-space:nowrap">${rtwCell(l, done)}</td>${canManage?`<td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button></td>`:''}</tr>`).join('')
+        all.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${sickTag(l)}${esc(l.reason)||'—'}</td><td style="white-space:nowrap">${rtwCell(l, done)}</td>${canManage?`<td style="text-align:right">${canDel?`<button class="btn btn-outline btn-sm" onclick="deleteLeave('${l.id}')">Delete</button>`:''}</td>`:''}</tr>`).join('')
       }</tbody></table></div>`:`<div class="empty small">No sickness recorded${per.bounds?' in '+esc(per.label):''}.</div>`}
     </div>`;
 }
 async function empTabPerformance(body, id){
   const reviews = (await idbByIndex('reviews','employee_id',id)).sort((a,b)=>(b.scheduled_date||'').localeCompare(a.scheduled_date||''));
   const objectives = await idbByIndex('objectives','employee_id',id);
-  const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id));
+  const canManage = canDo(id,'performance');
   const ones = (await idbByIndex('one_to_ones','employee_id',id)).filter(canSeeOneToOne).sort(sortOO);
   body.innerHTML = `
     <div class="card"><div class="card-head"><h3>One-to-ones</h3>${canManage?`<button class="btn btn-accent btn-sm" onclick="oneToOneForm({empId:'${id}'})">+ Schedule one-to-one</button>`:''}</div>
@@ -1533,6 +1605,47 @@ async function empTabPerformance(body, id){
 function reviewStatusBadge(s){ const m={scheduled:['Scheduled','b-blue'],in_progress:['In progress','b-amber'],completed:['Completed','b-green']}; const [t,c]=m[s]||[s,'b-grey']; return `<span class="badge ${c}">${t}</span>`; }
 function objStatusBadge(s){ const m={not_started:['Not started','b-grey'],in_progress:['In progress','b-amber'],achieved:['Achieved','b-green'],cancelled:['Cancelled','b-red']}; const [t,c]=m[s]||[s,'b-grey']; return `<span class="badge ${c}">${t}</span>`; }
 
+// ── HR notes & reminders (HR admin only) ──
+// Dated notes on a person, optionally with a reminder date that shows on the HR dashboard.
+async function empTabNotes(body, id){
+  if (state.user.role!=='hr_admin'){ body.innerHTML = '<div class="empty">Not available.</div>'; return; }
+  const notes = (await idbByIndex('hr_notes','employee_id',id)).sort((a,b)=>(b.created_at||'').localeCompare(a.created_at||''));
+  body.innerHTML = `<div class="card"><div class="card-head"><h3>Add a note</h3><span class="small muted">Only HR can see these</span></div>
+      <form onsubmit="saveHrNote(event,'${id}')">
+        <div class="form-group"><textarea id="hn-text" rows="3" required placeholder="e.g. Called to discuss return from maternity leave — agreed phased return"></textarea></div>
+        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+          <div class="form-group" style="margin:0"><label>Remind me on (optional)</label><input id="hn-remind" type="date" style="width:auto"></div>
+          <button type="submit" class="btn btn-primary">Add note</button>
+        </div>
+      </form></div>
+    <div class="card"><div class="card-head"><h3>Notes (${notes.length})</h3></div>
+      ${notes.length ? notes.map(n=>`<div class="hr-note"><div class="small muted">${fmtDateTime(n.created_at)} · ${esc(n.created_by_name||n.created_by)}${n.reminder_date?` · ${n.reminder_done?`<span class="badge b-grey">Reminder done</span>`:n.reminder_date<=today()?`<span class="badge b-red">Reminder due ${fmtDate(n.reminder_date)}</span>`:`<span class="badge b-amber">Reminder ${fmtDate(n.reminder_date)}</span>`}`:''}</div>
+        <div class="hr-note-text">${esc(n.text)}</div>
+        <div class="doc-btns" style="margin-top:6px">${n.reminder_date&&!n.reminder_done?`<button class="btn btn-outline btn-sm" onclick="doneHrNote('${n.id}')">Mark reminder done</button>`:''}<button class="btn btn-danger btn-sm" onclick="deleteHrNote('${n.id}')">Delete</button></div></div>`).join('') : '<div class="empty small">No notes yet.</div>'}
+    </div>`;
+}
+async function saveHrNote(ev, empId){
+  ev.preventDefault();
+  if (state.user.role!=='hr_admin') return;
+  const text = document.getElementById('hn-text').value.trim(); if (!text) return;
+  await idbPut('hr_notes', { id:uuid(), employee_id:empId, text, reminder_date: val('hn-remind')||null, reminder_done:false, created_by:state.user.username, created_by_name:state.user.full_name, created_at:nowISO() });
+  await logAction('hr_note_add', { employee_id:empId, detail: val('hn-remind') ? 'with reminder '+val('hn-remind') : '' });
+  toast('Note added'); refreshEmpTab();
+}
+async function doneHrNote(id){
+  const n = await idbGet('hr_notes', id); if (!n || state.user.role!=='hr_admin') return;
+  n.reminder_done = true; n.reminder_done_at = nowISO(); await idbPut('hr_notes', n);
+  await logAction('hr_note_reminder_done', { employee_id:n.employee_id });
+  toast('Reminder marked done'); if (!refreshEmpTab()) navigate(state.page);
+}
+async function deleteHrNote(id){
+  const n = await idbGet('hr_notes', id); if (!n || state.user.role!=='hr_admin') return;
+  if (!confirm('Delete this note?')) return;
+  await idbDelete('hr_notes', id); await logAction('hr_note_delete', { employee_id:n.employee_id });
+  toast('Note deleted'); refreshEmpTab();
+}
+// Reminders that have come due (HR dashboard)
+async function hrRemindersDue(){ return state.user.role==='hr_admin' ? (await idbGetAll('hr_notes')).filter(n=>n.reminder_date && !n.reminder_done && n.reminder_date<=today()).sort((a,b)=>a.reminder_date.localeCompare(b.reminder_date)) : []; }
 async function empTabDocuments(body, id){
   const docs = (await idbByIndex('documents','employee_id',id));
   const canEdit = state.user.role==='hr_admin';
@@ -1545,7 +1658,7 @@ async function empTabDocuments(body, id){
     body.insertAdjacentHTML('beforeend', `<div class="card"><div class="card-head"><h3>E-signatures</h3><button class="btn btn-accent btn-sm" onclick="sendSignForm('${id}')">+ Send for signature</button></div>${sigTable(sigs, false, 'No documents sent for signature.')}</div>`);
   }
   // Read-and-understood status for this person
-  const tracked = await trackedDocs();
+  const tracked = (await trackedDocs()).filter(d => docAppliesTo(d, empById(id)));
   if (!tracked.length) return;
   const acks = new Map((await idbByIndex('doc_acks','employee_id',id)).map(a=>[a.document_id,a]));
   body.insertAdjacentHTML('beforeend', `<div class="card"><div class="card-head"><h3>Policy confirmations</h3><span class="small muted">${tracked.filter(d=>acks.has(d.id)).length} of ${tracked.length} confirmed</span></div>
@@ -1601,6 +1714,7 @@ function employeeForm(id){
           <div class="form-group"><label>Work mobile</label><input id="f-wm" type="tel" value="${esc(e.work_mobile||'')}"></div>
           <div class="form-group"><label>Is a director?</label><select id="f-dir"><option value="no">No</option><option value="yes" ${e.is_director?'selected':''}>Yes</option></select></div>
         </div>
+        <div class="form-group"><label>Workplace roles</label><div style="display:flex;flex-wrap:wrap;gap:6px 18px">${WORKPLACE_ROLES.map(r=>`<label style="display:inline-flex;gap:6px;align-items:center;font-weight:400"><input type="checkbox" class="f-role" value="${esc(r)}" ${(e.workplace_roles||[]).includes(r)?'checked':''}> ${esc(r)}</label>`).join('')}</div></div>
         <div class="form-row-3">
           <div class="form-group"><label>Working hours / week</label><input id="f-hours" type="number" step="0.5" value="${e.working_hours??''}" placeholder="37.5"></div>
           <div class="form-group"><label>Notice period</label><input id="f-notice" value="${esc(e.notice_period||'')}" placeholder="1 month"></div>
@@ -1611,6 +1725,7 @@ function employeeForm(id){
           <div class="form-group"><label>End date</label><input id="f-end" type="date" value="${esc(e.end_date||'')}"></div>
           <div class="form-group"><label>Status</label><select id="f-status">${[['active','Active'],['on_leave','On leave'],['leaver','Leaver']].map(([v,t])=>`<option value="${v}" ${e.status===v?'selected':''}>${t}</option>`).join('')}</select></div>
         </div>
+        <div class="form-group"><label>Reason for leaving <span class="small muted">(required when status is Leaver)</span></label><select id="f-leavereason" style="max-width:320px"><option value="">—</option>${optionList(LEAVING_REASONS, e.leaving_reason)}</select></div>
         <div class="form-group"><label>Leaver sign-in allowed until</label><input id="f-lacc" type="date" value="${esc(e.leaver_access_until||'')}" style="max-width:220px"><div class="small muted">Leavers can sign in for ${LEAVER_ACCESS_DAYS} days after their end date (payslips, P45, contact details). Set a date here to extend or end that early.</div></div>
         <div class="form-row-3">
           <div class="form-group"><label>Salary (£/yr)</label><input id="f-sal" type="number" value="${e.salary??''}"></div>
@@ -1631,6 +1746,7 @@ function employeeForm(id){
 }
 async function saveEmployee(ev, id){
   ev.preventDefault();
+  if (val('f-status')==='leaver' && !val('f-leavereason')){ toast('Choose a reason for leaving','error'); return; }
   const existing = id ? empById(id) : null;
   let photo = existing?.photo || null;
   const fileEl = document.getElementById('f-photo');
@@ -1644,10 +1760,11 @@ async function saveEmployee(ev, id){
     address_line1: val('f-a1'), address_line2: val('f-a2'), city: val('f-city'), postcode: val('f-pc'),
     personal_email: val('f-pe'), work_email: val('f-we'), mobile_phone: val('f-mob'), home_phone: existing?.home_phone||'',
     work_phone: val('f-wp'), work_mobile: val('f-wm'), is_director: val('f-dir')==='yes',
+    workplace_roles: [...document.querySelectorAll('.f-role:checked')].map(c=>c.value),
     job_title: val('f-jt'), department: val('f-dept'), site: val('f-site'),
     manager_id: val('f-mgr')||null, employment_type: val('f-type'),
     working_hours: numVal('f-hours'), notice_period: val('f-notice'),
-    start_date: val('f-start'), end_date: val('f-end')||null, probation_end_date: val('f-prob')||null, status: val('f-status'), leaver_access_until: val('f-lacc')||null,
+    start_date: val('f-start'), end_date: val('f-end')||null, probation_end_date: val('f-prob')||null, status: val('f-status'), leaver_access_until: val('f-lacc')||null, leaving_reason: val('f-status')==='leaver' ? (val('f-leavereason')||null) : null,
     salary: numVal('f-sal'), pay_frequency: existing?.pay_frequency||'Annual',
     bank_sort_code: val('f-sort'), bank_account: val('f-acct'),
     holiday_allowance: numVal('f-hol') ?? DEFAULT_ALLOWANCE,
@@ -1801,13 +1918,14 @@ async function renderLeave(c, category){
     other:    { recTitle:'Other absence records',  recBtn:'+ Record absence',  preset:'unpaid' }
   }[category];
   const showType = category==='other';
-  if (state.user.role==='hr_admin' || isMgr) setTopbar(`<button class="btn btn-accent" onclick="leaveForm(null,false,'${meta.preset}')">${meta.recBtn}</button>`);
+  const mayManage = !isMgr || mgrCan(category,'manage');   // line-manager permission for this kind of absence
+  if (state.user.role==='hr_admin' || (isMgr && mayManage)) setTopbar(`<button class="btn btn-accent" onclick="leaveForm(null,false,'${meta.preset}')">${meta.recBtn}</button>`);
   const typeCol = showType ? '<th>Type</th>' : '';
   const typeCell = l => showType ? `<td>${leaveBadge(l.type)}</td>` : '';
   // Sickness: return-to-work interviews and Bradford Factor
   const isSick = category==='sickness';
   const rtwDone = isSick ? await rtwDoneSet() : null;
-  const rtwDue = isSick ? leave.filter(l=>isRtwDue(l, rtwDone) && canManageEmp(l.employee_id)).sort((a,b)=>a.end_date.localeCompare(b.end_date)) : [];
+  const rtwDue = isSick ? leave.filter(l=>isRtwDue(l, rtwDone) && canDo(l.employee_id,'sickness')).sort((a,b)=>a.end_date.localeCompare(b.end_date)) : [];
   const rtwCol = isSick ? '<th>Return to work</th>' : '';
   const rtwTd = l => isSick ? `<td style="white-space:nowrap">${rtwCell(l, rtwDone)}</td>` : '';
   let sickExtra = '';
@@ -1815,7 +1933,7 @@ async function renderLeave(c, category){
     const people = state.employees.filter(e => e.status!=='leaver' && (!scope || scope.includes(e.id)));
     sickExtra = `<div class="card"><div class="card-head"><h3>Return-to-work interviews due (${rtwDue.length})</h3></div>
       ${rtwDue.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Off sick</th><th>Days</th><th>Reason</th><th></th></tr></thead><tbody>${
-        rtwDue.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${fmtDate(l.start_date)}${l.end_date!==l.start_date?' – '+fmtDate(l.end_date):''}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td><td style="text-align:right"><button class="btn btn-accent btn-sm" onclick="rtwForm('${l.id}')">Return to work</button></td></tr>`).join('')
+        rtwDue.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${fmtDate(l.start_date)}${l.end_date!==l.start_date?' – '+fmtDate(l.end_date):''}</td><td>${l.days}</td><td class="small">${sickTag(l)}${esc(l.reason)||'—'}</td><td style="text-align:right"><button class="btn btn-accent btn-sm" onclick="rtwForm('${l.id}')">Return to work</button></td></tr>`).join('')
       }</tbody></table></div>`:`<div class="empty small">All caught up. Interviews are flagged for sickness that ended in the last ${RTW_DUE_WINDOW} days.</div>`}
     </div>` + bradfordTableHtml(people, leave);
   }
@@ -1823,7 +1941,7 @@ async function renderLeave(c, category){
     <div class="card">
       <div class="card-head"><h3>Awaiting approval (${pending.length})</h3></div>
       ${pending.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th>${typeCol}<th>From</th><th>To</th><th>Days</th><th>Reason</th><th></th></tr></thead><tbody>${
-        pending.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td>${typeCell(l)}<td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td><td style="text-align:right;white-space:nowrap"><button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')">Approve</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button></td></tr>`).join('')
+        pending.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td>${typeCell(l)}<td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${sickTag(l)}${esc(l.reason)||'—'}</td><td style="text-align:right;white-space:nowrap">${mayManage?`<button class="btn btn-success btn-sm" onclick="decideLeave('${l.id}','approved')">Approve</button> <button class="btn btn-danger btn-sm" onclick="decideLeave('${l.id}','rejected')">Reject</button>`:''}</td></tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">Nothing awaiting approval.</div>'}
     </div>
     ${category==='holiday'?`<div class="card">
@@ -1837,7 +1955,7 @@ async function renderLeave(c, category){
     <div class="card">
       <div class="card-head"><h3>${meta.recTitle}${per?` <span class="small muted">· ${esc(per.label)}</span>`:''}</h3></div>
       ${records.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th>${typeCol}<th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${rtwCol}</tr></thead><tbody>${
-        records.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td>${typeCell(l)}<td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusCell(l)}</td><td class="small">${esc(l.reason)||'—'}</td>${rtwTd(l)}</tr>`).join('')
+        records.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td>${typeCell(l)}<td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusCell(l)}</td><td class="small">${sickTag(l)}${esc(l.reason)||'—'}</td>${rtwTd(l)}</tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">No records.</div>'}
     </div>`;
 }
@@ -1849,6 +1967,7 @@ function refreshLeaveViews(){
 async function decideLeave(id, decision){
   const l = (await idbGetAll('leave')).find(x=>x.id===id);
   if (!l) return;
+  if (!canDo(l.employee_id, leaveArea(l.type), 'manage')){ toast('You don\'t have permission to approve this','error'); return; }
   if (decision==='approved' && l.type==='holiday' && !(await checkHolidayLimit(l.employee_id, l.start_date, Number(l.days)||0, l.id))) return;
   l.status = decision; l.decided_by = state.user.username; l.decided_at = nowISO();
   await idbPut('leave', l);
@@ -1856,7 +1975,9 @@ async function decideLeave(id, decision){
   toast('Leave '+decision);
   refreshLeaveViews();
 }
-async function deleteLeave(id){ const l=await idbGet('leave',id); if (l?.type==='adjustment' && state.user.role!=='hr_admin'){ toast('Only HR can change holiday adjustments','error'); return; } if(!confirm('Delete this leave record?'))return; await idbDelete('leave',id); await logAction('leave_delete', { employee_id:l?.employee_id, detail: l?`${leaveLabel(l.type)} ${l.start_date} to ${l.end_date} (${l.days} days)`:'' }); toast('Deleted'); refreshLeaveViews(); }
+// Which line-manager permission area a leave record belongs to
+const leaveArea = t => t==='holiday' ? 'holiday' : t==='sickness' ? 'sickness' : 'other';
+async function deleteLeave(id){ const l=await idbGet('leave',id); if (l?.type==='adjustment' && state.user.role!=='hr_admin'){ toast('Only HR can change holiday adjustments','error'); return; } if (l && l.type!=='adjustment' && !canDo(l.employee_id, leaveArea(l.type), 'delete')){ toast('You don\'t have permission to delete this record','error'); return; } if(!confirm('Delete this leave record?'))return; await idbDelete('leave',id); await logAction('leave_delete', { employee_id:l?.employee_id, detail: l?`${leaveLabel(l.type)} ${l.start_date} to ${l.end_date} (${l.days} days)`:'' }); toast('Deleted'); refreshLeaveViews(); }
 
 // ── Cancellation of approved, not-yet-started holiday ──
 // The booking stays "approved" (and counts against the balance) until the
@@ -1925,7 +2046,9 @@ async function leaveForm(presetEmp, asEmployee, presetType){
   // Managers may only record for their own direct reports
   if (!isSelf && state.user.role==='manager'){ const team=teamMemberIds(); empOptions = empOptions.filter(e=>team.includes(e.id)); }
   const defType = presetType || 'holiday';
-  const typeEntries = Object.entries(LEAVE_TYPES).filter(([k])=> k!=='adjustment' && (isSelf ? k==='holiday' : true));
+  // Managers can only record the kinds of absence their permissions allow
+  const typeEntries = Object.entries(LEAVE_TYPES).filter(([k])=> k!=='adjustment' && (isSelf ? k==='holiday' : mgrCan(leaveArea(k),'manage')));
+  if (!typeEntries.length){ toast('You don\'t have permission to record absence','error'); return; }
   openModal(`<h2>${isSelf?'Book holiday':'Record '+(LEAVE_TYPES[defType]?LEAVE_TYPES[defType].label.toLowerCase():'leave')}</h2>
     <form onsubmit="saveLeave(event, ${isSelf})">
       ${isSelf?'':`<div class="form-group"><label class="req">Employee</label><select id="lv-emp" required onchange="showHolidayAvailable()"><option value="">Select…</option>${empOptions.map(e=>`<option value="${e.id}" ${presetEmp===e.id?'selected':''}>${esc(e.first_name+' '+e.last_name)}</option>`).join('')}</select></div>`}
@@ -1933,6 +2056,7 @@ async function leaveForm(presetEmp, asEmployee, presetType){
         <div class="form-group"><label class="req">Type</label><select id="lv-type" onchange="recalcLeaveDays()">${(()=>{ const opt=([k,v])=>`<option value="${k}" ${defType===k?'selected':''}>${v.label}</option>`; const main=typeEntries.filter(([k])=>!OTHER_ABSENCE.includes(k)), oth=typeEntries.filter(([k])=>OTHER_ABSENCE.includes(k)); return main.map(opt).join('')+(oth.length?`<optgroup label="Other absence">${oth.map(opt).join('')}</optgroup>`:''); })()}</select></div>
         <div class="form-group"><label>Half day</label><select id="lv-half" onchange="recalcLeaveDays()"><option value="false">No</option><option value="true">Yes (single day)</option></select></div>
       </div>
+      <div class="form-group" id="lv-sick-wrap" style="display:none"><label class="req">Sickness type</label><select id="lv-sicktype"><option value="">Choose…</option>${SICKNESS_TYPES.map(t=>`<option>${esc(t)}</option>`).join('')}</select></div>
       <div class="form-row">
         <div class="form-group"><label class="req">From</label><input id="lv-start" type="date" value="${today()}" onchange="recalcLeaveDays()" required></div>
         <div class="form-group"><label class="req">To</label><input id="lv-end" type="date" value="${today()}" onchange="recalcLeaveDays()" required></div>
@@ -1947,6 +2071,7 @@ async function leaveForm(presetEmp, asEmployee, presetType){
   recalcLeaveDays();
 }
 function recalcLeaveDays(){
+  const sw = document.getElementById('lv-sick-wrap'); if (sw) sw.style.display = val('lv-type')==='sickness' ? '' : 'none';
   const half = val('lv-half')==='true';
   const s = val('lv-start'), e = val('lv-end');
   let d = workingDays(s,e);
@@ -1990,10 +2115,12 @@ async function saveLeave(ev, isSelf){
   const status = isSelf ? 'pending' : (val('lv-status') || 'approved');
   if (val('lv-end') < val('lv-start')){ toast('"To" date is before the "From" date','error'); return; }
   if (type==='holiday' && !(await checkHolidayLimit(empId, val('lv-start'), Number(val('lv-days'))||0))) return;
+  if (type==='sickness' && !val('lv-sicktype')){ toast('Choose a sickness type','error'); return; }
   const rec = {
     id: uuid(), employee_id: empId, type,
     start_date: val('lv-start'), end_date: val('lv-end'),
     days: Number(val('lv-days'))||0, half_day: val('lv-half')==='true',
+    sickness_type: type==='sickness' ? (val('lv-sicktype')||null) : null,
     status,
     reason: val('lv-reason'),
     requested_at: nowISO(),
@@ -2067,7 +2194,7 @@ async function renderPerformance(c){
     </div>`;
 }
 function reviewForm(empId, reviewId){
-  const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(empId)) ;
+  const canManage = canDo(empId,'performance');
   idbGetAll('reviews').then(all=>{
     const r = reviewId ? all.find(x=>x.id===reviewId) : {};
     const ro = !canManage; // employee read-only except self-assessment
@@ -2094,7 +2221,7 @@ async function saveReview(ev, empId, reviewId){
   ev.preventDefault();
   const all = await idbGetAll('reviews');
   const existing = reviewId ? all.find(x=>x.id===reviewId) : null;
-  const canManage = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(empId));
+  const canManage = canDo(empId,'performance');
   const rec = {
     id: reviewId||uuid(), employee_id: empId,
     type: canManage? val('rv-type') : (existing?.type||'annual'),
@@ -2125,7 +2252,7 @@ function objectiveForm(empId, objId){
           <div class="form-group"><label>Status</label><select id="ob-status">${[['not_started','Not started'],['in_progress','In progress'],['achieved','Achieved'],['cancelled','Cancelled']].map(([v,t])=>`<option value="${v}" ${o.status===v?'selected':''}>${t}</option>`).join('')}</select></div>
         </div>
         <div class="form-group"><label>Progress: <span id="ob-pval">${o.progress||0}</span>%</label><input id="ob-prog" type="range" min="0" max="100" value="${o.progress||0}" oninput="document.getElementById('ob-pval').textContent=this.value"></div>
-        <div class="modal-actions">${objId?`<button type="button" class="btn btn-danger" style="margin-right:auto" onclick="deleteObjective('${objId}','${empId}')">Delete</button>`:''}<button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
+        <div class="modal-actions">${objId && canDo(empId,'performance','delete')?`<button type="button" class="btn btn-danger" style="margin-right:auto" onclick="deleteObjective('${objId}','${empId}')">Delete</button>`:''}<button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
       </form>`);
   });
 }
@@ -2138,7 +2265,7 @@ async function saveObjective(ev, empId, objId){
   closeModal(); toast('Objective saved');
   refreshAfterDetail('Performance','performance');
 }
-async function deleteObjective(id, empId){ if(!confirm('Delete this objective?'))return; await idbDelete('objectives',id); await logAction('objective_delete', { employee_id: empId }); closeModal(); toast('Deleted'); refreshAfterDetail('Performance','performance'); }
+async function deleteObjective(id, empId){ if (!canDo(empId,'performance','delete')){ toast("You don't have permission to delete objectives",'error'); return; } if(!confirm('Delete this objective?'))return; await idbDelete('objectives',id); await logAction('objective_delete', { employee_id: empId }); closeModal(); toast('Deleted'); refreshAfterDetail('Performance','performance'); }
 
 function refreshAfterDetail(tabText, page){
   if (window._detailEmp){ const t=[...document.querySelectorAll('#emp-tabs .tab')].find(x=>x.textContent.trim()===tabText||x.textContent.includes(tabText)); if(t){ empTab(tabText==='Performance'?'performance':'leave', t); return; } }
@@ -2156,8 +2283,10 @@ function docRow(d, canEdit, extra={}){
 // Company document row with read-and-understood status / progress
 function companyDocRow(d, canEdit){
   const ctx = window._docAckCtx || {};
-  if (!isTrackedDoc(d)) return docRow(d, canEdit);
   let info = '', buttons = '';
+  // HR sees who each document is for and when it's due for review
+  if (state.user.role==='hr_admin') info += `<span class="small muted">For: ${esc(docAudienceLabel(d))}</span> ${reviewBadge(d)} `;
+  if (!isTrackedDoc(d)) return docRow(d, canEdit, { info });
   if (ctx.mine){
     const a = ctx.mine.get(d.id);
     info += a ? `<span class="badge b-green">Read &amp; understood · ${fmtDate(a.acknowledged_at)}</span>` : ackDueBadge(d);
@@ -2172,7 +2301,7 @@ function companyDocRow(d, canEdit){
 }
 async function renderDocuments(c){
   const canEdit = state.user.role==='hr_admin';
-  const all = (await idbGetAll('documents')).filter(d=>!d.employee_id); // company-wide only here
+  const all = (await idbGetAll('documents')).filter(d=>!d.employee_id && docVisibleTo(d)); // company-wide, for this person
   if (canEdit) setTopbar(`<button class="btn btn-accent" onclick="documentForm()">+ Upload document</button>`);
   const cats = Object.keys(DOC_CATEGORIES);
   window._companyDocs = all;
@@ -2213,10 +2342,10 @@ function documentForm(empId){
       <div class="form-group"><label>Category</label><select id="dc-cat">${Object.entries(DOC_CATEGORIES).map(([v,t])=>`<option value="${v}" ${(isEmp&&v==='contract')||(!isEmp&&v==='policy')?'selected':''}>${t}</option>`).join('')}</select></div>
       <div class="form-group"><label>Description</label><input id="dc-desc"></div>
       <div class="form-group"><label class="req">File</label><input id="dc-file" type="file" required></div>
-      ${isEmp?'':ackFields()}
+      ${isEmp?'':audienceFields()+ackFields()}
       <div class="small muted">Stored locally in this browser. Large files increase storage use.</div>
       <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Upload</button></div>
-    </form>`);
+    </form>`, !isEmp);
 }
 async function saveDoc(ev, empId){
   ev.preventDefault();
@@ -2224,7 +2353,7 @@ async function saveDoc(ev, empId){
   if (!file){ toast('Choose a file','error'); return; }
   const data = await fileToDataURL(file);
   const rec = { id:uuid(), employee_id: empId||null, category: val('dc-cat'), title: val('dc-title'), filename: file.name, mime_type: file.type, data, description: val('dc-desc'), uploaded_by: state.user.username, uploaded_at: nowISO() };
-  if (!empId) applyAckFields(rec);
+  if (!empId){ if (!applyAudienceFields(rec)) return; applyAckFields(rec); }
   await idbPut('documents', rec);
   await logAction('document_upload', { employee_id: empId||null, detail: rec.title });
   closeModal(); toast('Document uploaded');
@@ -2301,18 +2430,24 @@ function trainingStatusBadge(r){ const s=trainingStatus(r); return `<span class=
 function canEditTraining(r){
   const role = state.user.role;
   if (role==='hr_admin') return true;
-  if (role==='manager' && teamMemberIds().includes(r.employee_id)) return true;
+  if (role==='manager' && teamMemberIds().includes(r.employee_id)) return mgrCan('training','manage');
+  return r.employee_id===state.user.employee_id && r.added_by===state.user.username;
+}
+// Managers delete a team member's training only if allowed; people can delete records they added themselves
+function canDeleteTraining(r){
+  if (state.user.role==='hr_admin') return true;
+  if (state.user.role==='manager' && teamMemberIds().includes(r.employee_id)) return mgrCan('training','delete');
   return r.employee_id===state.user.employee_id && r.added_by===state.user.username;
 }
 function canViewTrainingFor(empId){
   const role = state.user.role;
-  return role==='hr_admin' || empId===state.user.employee_id || (role==='manager' && teamMemberIds().includes(empId));
+  return role==='hr_admin' || empId===state.user.employee_id || (role==='manager' && teamMemberIds().includes(empId) && mgrCan('training','view'));
 }
 const sortTraining = (a,b) => (b.completed_date||'').localeCompare(a.completed_date||'');
 function trainingTable(list, showEmp, emptyMsg){
   if (!list.length) return `<div class="empty small">${emptyMsg}</div>`;
   return `<div class="table-wrap"><table><thead><tr>${showEmp?'<th>Employee</th>':''}<th>Course / qualification</th><th>Category</th><th>Provider</th><th>Completed</th><th>Expires</th><th>Status</th><th></th></tr></thead><tbody>${
-    list.map(r=>`<tr>${showEmp?`<td>${esc(empName(r.employee_id))}</td>`:''}<td><strong>${esc(r.title)}</strong>${r.notes?`<div class="small muted">${esc(r.notes)}</div>`:''}</td><td class="small">${esc(r.category)||'—'}</td><td class="small">${esc(r.provider)||'—'}</td><td>${fmtDate(r.completed_date)}</td><td>${r.expiry_date?fmtDate(r.expiry_date):'—'}</td><td>${trainingStatusBadge(r)}</td><td style="text-align:right;white-space:nowrap">${r.file?`<button class="btn btn-outline btn-sm" onclick="openTrainingCert('${r.id}')" title="${esc(r.file.filename)}">Certificate</button> `:''}${canEditTraining(r)?`<button class="btn btn-outline btn-sm" onclick="trainingForm({id:'${r.id}'})">Edit</button> <button class="btn btn-danger btn-sm" onclick="deleteTraining('${r.id}')">×</button>`:''}</td></tr>`).join('')
+    list.map(r=>`<tr>${showEmp?`<td>${esc(empName(r.employee_id))}</td>`:''}<td><strong>${esc(r.title)}</strong>${r.notes?`<div class="small muted">${esc(r.notes)}</div>`:''}</td><td class="small">${esc(r.category)||'—'}</td><td class="small">${esc(r.provider)||'—'}</td><td>${fmtDate(r.completed_date)}</td><td>${r.expiry_date?fmtDate(r.expiry_date):'—'}</td><td>${trainingStatusBadge(r)}</td><td style="text-align:right;white-space:nowrap">${r.file?`<button class="btn btn-outline btn-sm" onclick="openTrainingCert('${r.id}')" title="${esc(r.file.filename)}">Certificate</button> `:''}${canEditTraining(r)?`<button class="btn btn-outline btn-sm" onclick="trainingForm({id:'${r.id}'})">Edit</button>${canDeleteTraining(r)?` <button class="btn btn-danger btn-sm" onclick="deleteTraining('${r.id}')">×</button>`:''}`:''}</td></tr>`).join('')
   }</tbody></table></div>`;
 }
 async function renderTraining(c){
@@ -2361,7 +2496,7 @@ async function renderMyTraining(c){
 }
 async function empTabTraining(body, id){
   const list = (await idbByIndex('training','employee_id',id)).sort(sortTraining);
-  const canAdd = state.user.role==='hr_admin' || (state.user.role==='manager' && teamMemberIds().includes(id));
+  const canAdd = canDo(id,'training');
   body.innerHTML = `<div class="card"><div class="card-head"><h3>Training records</h3>${canAdd?`<button class="btn btn-accent btn-sm" onclick="trainingForm({employee_id:'${id}'})">+ Add training record</button>`:''}</div>
     ${trainingTable(list, false, 'No training records.')}</div>`;
 }
@@ -2415,7 +2550,7 @@ async function saveTraining(ev, id, presetEmp){
 }
 async function deleteTraining(id){
   const r = await idbGet('training', id);
-  if (!r || !canEditTraining(r)) return;
+  if (!r || !canDeleteTraining(r)){ toast("You don't have permission to delete this record",'error'); return; }
   if (!confirm(`Delete the training record "${r.title}"?`)) return;
   await idbDelete('training', id);
   await logAction('training_delete', { employee_id: r.employee_id });
@@ -2668,7 +2803,7 @@ async function renderOrgChart(c){
   people.filter(e=>!seen.has(e.id)).forEach(e => { tree += node(e); });
   c.innerHTML = `
     <div class="toolbar">
-      <div class="pill-tabs" id="org-view" style="margin:0"><div class="pill active" onclick="orgView('chart',this)">Chart</div><div class="pill" onclick="orgView('dept',this)">By department</div></div>
+      <div class="pill-tabs" id="org-view" style="margin:0"><div class="pill active" onclick="orgView('chart',this)">Chart</div><div class="pill" onclick="orgView('dept',this)">By department</div><div class="pill" onclick="orgView('roles',this)">Workplace roles</div></div>
       <input class="grow" id="org-search" placeholder="Find a person, job title or department…" oninput="orgSearch()">
       <select id="org-site" onchange="orgSearch()"><option value="">All sites</option>${SITES.map(s=>`<option>${esc(s)}</option>`).join('')}</select>
     </div>
@@ -2676,7 +2811,8 @@ async function renderOrgChart(c){
       ${people.length?`<div class="org-wrap"><div class="org-tree"><ul>${tree}</ul></div></div>`:'<div class="empty">No employees yet.</div>'}
       <div class="small muted" style="margin-top:8px">${people.length} people · reporting lines come from each employee's <em>Manager</em> field · click anyone for contact details</div>
     </div>
-    <div id="org-dept-card" style="display:none">${orgDeptHtml(people)}</div>`;
+    <div id="org-dept-card" style="display:none">${orgDeptHtml(people)}</div>
+    <div id="org-roles-card" style="display:none">${orgRolesHtml(people)}</div>`;
 }
 function orgSearchText(e){ return esc(`${e.first_name} ${e.last_name} ${e.job_title||''} ${e.department||''}`.toLowerCase()); }
 function orgNodeHtml(e, nReports){
@@ -2698,11 +2834,25 @@ function orgDeptHtml(people){
     }</tbody></table></div></div>`;
   }).join('');
 }
+// Who holds each workplace role (first aiders, fire wardens, …), grouped by site
+function orgRolesHtml(people){
+  const sites = [...new Set([...SITES, ...people.map(e=>e.site).filter(Boolean)])];
+  const any = people.some(e=>(e.workplace_roles||[]).length);
+  if (!any) return `<div class="card"><div class="empty small">No workplace roles recorded yet.${state.user.role==='hr_admin'?' Tick them on each person\'s employee record (Edit → Workplace roles).':''}</div></div>`;
+  return sites.map(site => {
+    const here = people.filter(e=>e.site===site && (e.workplace_roles||[]).length);
+    if (!here.length) return '';
+    return `<div class="card org-dept"><div class="card-head"><h3>${esc(site)}</h3></div><div class="table-wrap"><table><thead><tr><th>Role</th><th>People</th></tr></thead><tbody>${
+      WORKPLACE_ROLES.map(role => { const who = here.filter(e=>e.workplace_roles.includes(role)); return `<tr><td>${esc(role)}</td><td>${who.length ? who.map(e=>`<a href="#" class="org-row" data-search="${orgSearchText(e)}" data-site="${esc(e.site||'')}" onclick="event.preventDefault();orgContact('${e.id}')">${esc(e.first_name+' '+e.last_name)}</a>${e.work_mobile||e.work_phone?` <span class="small muted">${esc(e.work_mobile||e.work_phone)}</span>`:''}`).join(', ') : '<span class="muted">None recorded</span>'}</td></tr>`; }).join('')
+    }</tbody></table></div></div>`;
+  }).join('');
+}
 function orgView(v, el){
   document.querySelectorAll('#org-view .pill').forEach(p=>p.classList.remove('active'));
   el.classList.add('active');
   document.getElementById('org-chart-card').style.display = v==='chart' ? '' : 'none';
   document.getElementById('org-dept-card').style.display = v==='dept' ? '' : 'none';
+  document.getElementById('org-roles-card').style.display = v==='roles' ? '' : 'none';
 }
 function orgSearch(){
   const q = (val('org-search')||'').toLowerCase(), site = val('org-site');
@@ -2726,6 +2876,7 @@ function orgContact(id){
       <dt>Work email</dt><dd>${e.work_email?`<a href="mailto:${esc(e.work_email)}">${esc(e.work_email)}</a>`:'—'}</dd>
       <dt>Work phone</dt><dd>${phoneLink(e.work_phone)}</dd>
       <dt>Work mobile</dt><dd>${phoneLink(e.work_mobile)}</dd>
+      ${(e.workplace_roles||[]).length?`<dt>Workplace roles</dt><dd>${rolesHtml(e)}</dd>`:''}
     </dl>
     <div class="modal-actions">${canOpen?`<button class="btn btn-primary" onclick="closeModal();employeeDetail('${id}')">Open employee record</button>`:''}<button class="btn btn-outline" onclick="closeModal()">Close</button></div>`);
 }
@@ -2740,9 +2891,58 @@ const isTrackedDoc = d => !d.employee_id && d.ack === 1;
 async function trackedDocs(){ return (await idbByIndex('documents','ack',1)).filter(isTrackedDoc); }
 async function outstandingAcks(empId){
   const e = empById(empId); if (!e || e.status==='leaver') return [];
-  const docs = await trackedDocs(); if (!docs.length) return [];
+  const docs = (await trackedDocs()).filter(d => docAppliesTo(d, e)); if (!docs.length) return [];
   const done = new Set((await idbByIndex('doc_acks','employee_id',empId)).map(a=>a.document_id));
   return docs.filter(d=>!done.has(d.id));
+}
+// ── Who a company document is for ──
+// d.audience = { type:'all'|'managers'|'hr'|'departments'|'sites'|'people', values:[...] }; missing = everyone.
+const DOC_AUDIENCES = [['all','Everyone'],['managers','Line managers'],['hr','HR only'],['departments','Chosen departments'],['sites','Chosen sites'],['people','Chosen people']];
+const userRoleOfEmp = empId => Object.values(state.usersById).find(u=>u.employee_id===empId)?.role;
+function docAppliesTo(d, emp){
+  const a = d.audience;
+  if (!a || a.type==='all') return true;
+  if (!emp) return false;
+  switch (a.type){
+    case 'managers': return userRoleOfEmp(emp.id)==='manager' || state.employees.some(x=>x.manager_id===emp.id && x.status!=='leaver');
+    case 'hr': return userRoleOfEmp(emp.id)==='hr_admin';
+    case 'departments': return (a.values||[]).includes(emp.department);
+    case 'sites': return (a.values||[]).includes(emp.site);
+    case 'people': return (a.values||[]).includes(emp.id);
+  }
+  return true;
+}
+// HR sees every company document; everyone else only those meant for them
+function docVisibleTo(d){ return state.user.role==='hr_admin' || docAppliesTo(d, empById(state.user.employee_id)); }
+function docAudienceLabel(d){
+  const a = d.audience; if (!a || a.type==='all') return 'Everyone';
+  const label = (DOC_AUDIENCES.find(([k])=>k===a.type)||[])[1] || a.type;
+  if (!['departments','sites','people'].includes(a.type)) return label;
+  const vals = (a.values||[]).map(v => a.type==='people' ? empName(v) : v);
+  return vals.length ? vals.join(', ') : label;
+}
+function reviewBadge(d){
+  if (!d.review_date) return '';
+  return d.review_date < today() ? `<span class="badge b-red">Review overdue · ${fmtDate(d.review_date)}</span>` : d.review_date <= addDays(today(),30) ? `<span class="badge b-amber">Review by ${fmtDate(d.review_date)}</span>` : `<span class="badge b-grey">Review ${fmtDate(d.review_date)}</span>`;
+}
+// Audience + review date fields on the upload / edit forms
+function audienceFields(d={}){
+  const a = d.audience || { type:'all', values:[] };
+  const people = state.employees.filter(e=>e.status!=='leaver').sort((x,y)=>(x.last_name||'').localeCompare(y.last_name||''));
+  const depts = [...new Set([...DEPARTMENTS, ...state.employees.map(e=>e.department).filter(Boolean)])].sort();
+  const box = (type, items) => `<div class="sig-people dc-aud-box" data-type="${type}" style="${a.type===type?'':'display:none'};max-height:170px">${items.map(([v,t])=>`<label class="sig-person"><input type="checkbox" class="dc-audv" value="${esc(v)}" ${a.type===type&&(a.values||[]).includes(v)?'checked':''}> ${esc(t)}</label>`).join('')}</div>`;
+  return `<fieldset><legend>Who it's for</legend>
+      <div class="form-group"><select id="dc-aud" onchange="document.querySelectorAll('.dc-aud-box').forEach(b=>b.style.display = b.dataset.type===this.value ? '' : 'none')">${DOC_AUDIENCES.map(([k,t])=>`<option value="${k}" ${a.type===k?'selected':''}>${t}</option>`).join('')}</select></div>
+      ${box('departments', depts.map(x=>[x,x]))}${box('sites', SITES.map(x=>[x,x]))}${box('people', people.map(e=>[e.id, e.first_name+' '+e.last_name]))}
+      <div class="form-group" style="margin:10px 0 0"><label>Review date (optional)</label><input id="dc-review" type="date" value="${esc(d.review_date||'')}" style="max-width:200px"><div class="small muted">HR is reminded on the dashboard as this date approaches.</div></div>
+    </fieldset>`;
+}
+function applyAudienceFields(rec){
+  const type = val('dc-aud') || 'all';
+  const values = ['departments','sites','people'].includes(type) ? [...document.querySelectorAll(`.dc-aud-box[data-type="${type}"] .dc-audv:checked`)].map(c=>c.value) : [];
+  if (['departments','sites','people'].includes(type) && !values.length){ toast('Tick at least one '+(type==='people'?'person':type.slice(0,-1)),'error'); return false; }
+  rec.audience = { type, values }; rec.review_date = val('dc-review') || null;
+  return true;
 }
 function ackDueBadge(d){
   if (!d.ack_deadline) return '<span class="badge b-amber">To confirm</span>';
@@ -2756,10 +2956,12 @@ function ackAudience(){
   return [];
 }
 async function ackCounts(docs){
-  const people = ackAudience(), ids = new Set(people.map(e=>e.id));
   const acks = await idbGetAll('doc_acks');
   const out = {};
-  docs.forEach(d => { const done = acks.filter(a=>a.document_id===d.id && ids.has(a.employee_id)).length; out[d.id] = { done, total: people.length }; });
+  docs.forEach(d => {
+    const people = ackAudience().filter(e => docAppliesTo(d, e)), ids = new Set(people.map(e=>e.id));
+    out[d.id] = { done: acks.filter(a=>a.document_id===d.id && ids.has(a.employee_id)).length, total: people.length };
+  });
   return out;
 }
 function applyAckFields(rec){
@@ -2808,7 +3010,7 @@ async function saveAck(ev, docId){
 async function ackStatus(docId){
   const d = await idbGet('documents', docId); if (!d) return;
   const acks = new Map((await idbByIndex('doc_acks','document_id',docId)).map(a=>[a.employee_id,a]));
-  const people = ackAudience().sort((a,b)=>(acks.has(a.id)-acks.has(b.id)) || (a.last_name||'').localeCompare(b.last_name||''));
+  const people = ackAudience().filter(e=>docAppliesTo(d, e)).sort((a,b)=>(acks.has(a.id)-acks.has(b.id)) || (a.last_name||'').localeCompare(b.last_name||''));
   const done = people.filter(e=>acks.has(e.id)).length;
   window._ackStatusRows = people.map(e=>[e.first_name+' '+e.last_name, e.employee_number||'', e.department||'', e.site||'', acks.has(e.id)?'Confirmed':'Outstanding', acks.get(e.id)?.acknowledged_at?.slice(0,10)||'']);
   openModal(`<h2>${esc(d.title)}</h2><div class="modal-sub">${done} of ${people.length} ${state.user.role==='manager'?'in your team ':''}confirmed${d.ack_deadline?` · confirm by ${fmtDate(d.ack_deadline)}`:''}</div>
@@ -2830,10 +3032,10 @@ async function docEditForm(docId){
         <div class="form-group"><label>Replace file (new version)</label><input id="dc-file" type="file"></div>
       </div>
       <div class="form-group"><label>Description</label><input id="dc-desc" value="${esc(d.description||'')}"></div>
-      ${ackFields(d)}
+      ${audienceFields(d)}${ackFields(d)}
       ${n?`<label style="display:flex;gap:8px;align-items:center;margin-top:-4px"><input type="checkbox" id="dc-reset"> <span>Ask everyone to confirm again <span class="small muted">(clears ${n} existing confirmation${n!==1?'s':''} — use after a policy update)</span></span></label>`:''}
       <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
-    </form>`);
+    </form>`, true);
 }
 async function saveDocEdit(ev, docId){
   ev.preventDefault();
@@ -2841,6 +3043,7 @@ async function saveDocEdit(ev, docId){
   const file = document.getElementById('dc-file').files[0];
   if (file){ d.data = await fileToDataURL(file); d.filename = file.name; d.mime_type = file.type; d.uploaded_at = nowISO(); d.uploaded_by = state.user.username; }
   d.title = val('dc-title'); d.category = val('dc-cat'); d.description = val('dc-desc');
+  if (!applyAudienceFields(d)) return;
   applyAckFields(d);
   await idbPut('documents', d);
   if (document.getElementById('dc-reset')?.checked){ for (const a of await idbByIndex('doc_acks','document_id',docId)) await idbDelete('doc_acks', a.id); }
@@ -3040,7 +3243,7 @@ async function oneToOneForm(opts={}){
   const r = o || { type: opts.request?'Informal':'Monthly', date:'', time:'', location: (empById(opts.empId)||me||{}).site||'', agenda:'' };
   // Meeting details are editable when scheduling, by the manager while open, or by the employee while it's still a request
   const lock = (mode==='own' && o.status!=='requested') || (o && ['completed','declined','cancelled'].includes(o.status) && mode!=='run') ? 'disabled' : '';
-  const team = state.employees.filter(e=>e.status!=='leaver' && canManageEmp(e.id) && e.id!==state.user.employee_id).sort((a,b)=>(a.last_name||'').localeCompare(b.last_name||''));
+  const team = state.employees.filter(e=>e.status!=='leaver' && canDo(e.id,'performance') && e.id!==state.user.employee_id).sort((a,b)=>(a.last_name||'').localeCompare(b.last_name||''));
   const active = state.employees.filter(e=>e.status!=='leaver').sort((a,b)=>(a.last_name||'').localeCompare(b.last_name||''));
   let who = '';
   if (mode==='schedule'){
@@ -3102,7 +3305,7 @@ async function saveOneToOne(ev, id, mode){
     msg = 'Request sent';
   } else if (mode==='schedule'){
     const empId = val('oo-emp');
-    if (!empId || !canManageEmp(empId)){ toast('Choose one of your team','error'); return; }
+    if (!empId || !canDo(empId,'performance')){ toast('Choose one of your team','error'); return; }
     rec = { id:uuid(), employee_id:empId, with_id: state.user.role==='hr_admin' ? (val('oo-with')||null) : state.user.employee_id, ...meeting, status:'scheduled', ...blank, requested_by:state.user.username, created_at:nowISO() };
     msg = 'One-to-one scheduled';
   } else if (mode==='run'){
@@ -3330,7 +3533,7 @@ function bradford(empId, leave, asOf = today()){
 function rtwCell(l, done){
   if (done.has(l.id)) return `<button class="btn btn-outline btn-sm" onclick="rtwForm('${l.id}')">View RTW</button>`;
   if (l.end_date >= today()) return '<span class="small muted">Still off</span>';
-  if (!canManageEmp(l.employee_id)) return '<span class="small muted">—</span>';
+  if (!canDo(l.employee_id,'sickness')) return '<span class="small muted">—</span>';
   return `<button class="btn btn-accent btn-sm" onclick="rtwForm('${l.id}')">Return to work</button>${isRtwDue(l, done)?' <span class="badge b-amber">Due</span>':''}`;
 }
 async function rtwDoneSet(){ return new Set((await idbGetAll('rtw')).map(r=>r.leave_id)); }
@@ -3339,17 +3542,17 @@ function nextWorkingDay(ds){ let d = addDays(ds,1); while (isWeekend(d) || state
 async function rtwForm(leaveId){
   const l = await idbGet('leave', leaveId); if (!l) return;
   const r = await idbGet('rtw', leaveId);
-  const canDo = canManageEmp(l.employee_id), own = l.employee_id===state.user.employee_id;
-  if (!canDo && !own){ toast('Not permitted','error'); return; }
-  if (!r && !canDo){ toast('No return-to-work interview recorded yet','info'); return; }
+  const rtwCan = canDo(l.employee_id,'sickness'), own = l.employee_id===state.user.employee_id;
+  if (!rtwCan && !own){ toast('Not permitted','error'); return; }
+  if (!r && !rtwCan){ toast('No return-to-work interview recorded yet','info'); return; }
   const x = r || { interview_date: today(), returned_date: nextWorkingDay(l.end_date), reason: l.reason||'', certification:'Self-certified', work_related:'No', accident_book:'N/A', fitness:'Fit for full duties', support:'', oh_referral:'No', notes:'', employee_comments:'' };
   const bf = r?.bradford || bradford(l.employee_id, await idbByIndex('leave','employee_id',l.employee_id));
-  const ro = canDo ? '' : 'disabled';
+  const ro = rtwCan ? '' : 'disabled';
   const sel = (id, opts, v) => `<select id="${id}" ${ro}>${optionList(opts, v)}</select>`;
   openModal(`<h2>Return-to-work interview</h2>
-    <div class="modal-sub">${esc(empName(l.employee_id))} · off sick ${fmtDate(l.start_date)}${l.end_date!==l.start_date?' – '+fmtDate(l.end_date):''} · ${l.days} day${l.days!==1?'s':''}${r?` · completed by ${esc(r.conducted_by)} on ${fmtDate(r.interview_date)}`:''}</div>
+    <div class="modal-sub">${esc(empName(l.employee_id))} · off sick ${fmtDate(l.start_date)}${l.end_date!==l.start_date?' – '+fmtDate(l.end_date):''} · ${l.days} day${l.days!==1?'s':''}${l.sickness_type?' · '+esc(l.sickness_type):''}${r?` · completed by ${esc(r.conducted_by)} on ${fmtDate(r.interview_date)}`:''}</div>
     <form onsubmit="saveRtw(event,'${leaveId}')">
-      ${canDo?`<div class="rtw-bf"><strong>Bradford Factor (last 52 weeks): ${bf.score}</strong> <span class="small muted">· ${bf.S} spell${bf.S!==1?'s':''} × ${bf.D} day${bf.D!==1?'s':''}${r?' · at the time of this interview':''}</span></div>`:''}
+      ${rtwCan?`<div class="rtw-bf"><strong>Bradford Factor (last 52 weeks): ${bf.score}</strong> <span class="small muted">· ${bf.S} spell${bf.S!==1?'s':''} × ${bf.D} day${bf.D!==1?'s':''}${r?' · at the time of this interview':''}</span></div>`:''}
       <div class="form-row">
         <div class="form-group"><label class="req">Interview date</label><input id="rt-date" type="date" value="${esc(x.interview_date)}" required ${ro}></div>
         <div class="form-group"><label>Returned to work</label><input id="rt-back" type="date" value="${esc(x.returned_date||'')}" ${ro}></div>
@@ -3367,16 +3570,16 @@ async function rtwForm(leaveId){
       <div class="form-group"><label>Adjustments or support agreed</label><textarea id="rt-support" rows="2" ${ro}>${esc(x.support)}</textarea></div>
       <div class="form-group"><label>Manager notes</label><textarea id="rt-notes" rows="2" ${ro}>${esc(x.notes)}</textarea></div>
       <div class="form-group"><label>Employee comments</label><textarea id="rt-emp" rows="2" ${own?'':'disabled'} placeholder="${own?'Add anything you would like recorded':''}">${esc(x.employee_comments)}</textarea></div>
-      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Close</button>${canDo||(own&&r)?`<button type="submit" class="btn btn-primary">${canDo?(r?'Save changes':'Complete interview'):'Save my comments'}</button>`:''}</div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="closeModal()">Close</button>${rtwCan||(own&&r)?`<button type="submit" class="btn btn-primary">${rtwCan?(r?'Save changes':'Complete interview'):'Save my comments'}</button>`:''}</div>
     </form>`, true);
 }
 async function saveRtw(ev, leaveId){
   ev.preventDefault();
   const l = await idbGet('leave', leaveId); if (!l) return;
   const existing = await idbGet('rtw', leaveId);
-  const canDo = canManageEmp(l.employee_id), own = l.employee_id===state.user.employee_id;
+  const rtwCan = canDo(l.employee_id,'sickness'), own = l.employee_id===state.user.employee_id;
   let rec;
-  if (canDo){
+  if (rtwCan){
     rec = { ...(existing||{}), leave_id: leaveId, employee_id: l.employee_id,
       interview_date: val('rt-date'), returned_date: val('rt-back'), reason: val('rt-reason'), certification: val('rt-cert'), work_related: val('rt-work'),
       accident_book: val('rt-acc'), fitness: val('rt-fit'), oh_referral: val('rt-oh'), support: val('rt-support'), notes: val('rt-notes'),
@@ -3408,30 +3611,44 @@ function bradfordTableHtml(people, leave){
 // ═══════════════════════════════════════════════
 // Posted by HR to everyone, one site or one department. "New" is anything
 // published since the person last opened the Announcements page.
-function annAudienceLabel(a){
-  if (!a.audience || a.audience==='all') return 'Everyone';
-  const [t, v] = a.audience.split(':');
-  return `${t==='site'?'Site':'Department'}: ${v}`;
+// a.audience is { type:'all'|'departments'|'sites', values:[...] }. Older announcements
+// stored a string ('all', 'site:Leeds', 'dept:Finance') — read both.
+function annAud(a){
+  const x = a.audience;
+  if (!x || x==='all') return { type:'all', values:[] };
+  if (typeof x === 'string'){ const [t, v] = x.split(':'); return { type: t==='site' ? 'sites' : 'departments', values:[v] }; }
+  return x;
 }
+function annAudienceLabel(a){
+  const x = annAud(a);
+  return x.type==='all' ? 'Everyone' : `${x.type==='sites'?'Site':'Department'}${x.values.length!==1?'s':''}: ${x.values.join(', ')}`;
+}
+// When it goes live: the "publish on" date, or when it was posted
+const annPublished = a => a.publish_on ? a.publish_on + 'T00:00:00' : (a.created_at||'');
+const annScheduled = a => !!a.publish_on && a.publish_on > today();
 function annVisibleTo(a){
   if (state.user.role==='hr_admin') return true;
+  if (annScheduled(a)) return false;
   if (a.expires && a.expires < today()) return false;
-  if (!a.audience || a.audience==='all') return true;
+  const x = annAud(a);
+  if (x.type==='all') return true;
   const e = empById(state.user.employee_id); if (!e) return false;
-  const [t, v] = a.audience.split(':');
-  return t==='site' ? e.site===v : e.department===v;
+  return x.type==='sites' ? x.values.includes(e.site) : x.values.includes(e.department);
 }
 async function visibleAnnouncements(){
-  return (await idbGetAll('announcements')).filter(annVisibleTo).sort((a,b)=>(!!b.pinned - !!a.pinned) || (b.created_at||'').localeCompare(a.created_at||''));
+  return (await idbGetAll('announcements')).filter(annVisibleTo).sort((a,b)=>(!!b.pinned - !!a.pinned) || annPublished(b).localeCompare(annPublished(a)));
 }
-function isNewAnnouncement(a){ return state.user.role!=='hr_admin' && (!a.expires || a.expires>=today()) && (a.created_at||'') > (state.user.ann_seen_at||''); }
+function isNewAnnouncement(a){ return state.user.role!=='hr_admin' && !annScheduled(a) && (!a.expires || a.expires>=today()) && annPublished(a) > (state.user.ann_seen_at||''); }
+// Only http(s) links are shown, opened in a new tab
+const safeLink = u => /^https?:\/\//i.test(u||'') ? u : '';
 function annCardHtml(a, canEdit, isNew){
-  const expired = a.expires && a.expires < today();
+  const expired = a.expires && a.expires < today(), link = safeLink(a.link);
   return `<div class="card ann-card${a.pinned?' pinned':''}${expired?' expired':''}">
-    <div class="card-head" style="margin-bottom:6px"><h3>${a.pinned?'📌 ':''}${esc(a.title)} ${isNew?'<span class="badge b-yellow">New</span>':''}${expired?' <span class="badge b-grey">Expired</span>':''}</h3>
+    <div class="card-head" style="margin-bottom:6px"><h3>${a.pinned?'📌 ':''}${esc(a.title)} ${isNew?'<span class="badge b-yellow">New</span>':''}${expired?' <span class="badge b-grey">Expired</span>':''}${annScheduled(a)?` <span class="badge b-blue">Scheduled · ${fmtDate(a.publish_on)}</span>`:''}</h3>
       ${canEdit?`<div class="doc-btns"><button class="btn btn-outline btn-sm" onclick="annForm('${a.id}')">Edit</button> <button class="btn btn-danger btn-sm" onclick="deleteAnn('${a.id}')">×</button></div>`:''}</div>
-    <div class="small muted" style="margin-bottom:10px">${fmtDate(a.created_at)} · ${esc(annAudienceLabel(a))}${a.expires?` · until ${fmtDate(a.expires)}`:''}</div>
+    <div class="small muted" style="margin-bottom:10px">${fmtDate(annPublished(a))} · ${esc(annAudienceLabel(a))}${a.expires?` · until ${fmtDate(a.expires)}`:''}</div>
     <div class="ann-body">${esc(a.body)}</div>
+    ${link?`<p style="margin-top:10px"><a href="${esc(link)}" target="_blank" rel="noopener">${esc(a.link_text||link)}</a></p>`:''}
   </div>`;
 }
 async function renderAnnouncements(c){
@@ -3444,25 +3661,32 @@ async function renderAnnouncements(c){
 }
 // Latest few for the dashboard / My Profile
 async function latestAnnouncementsHtml(){
-  const list = (await visibleAnnouncements()).filter(a => !a.expires || a.expires >= today()).slice(0, 3);
+  const list = (await visibleAnnouncements()).filter(a => !annScheduled(a) && (!a.expires || a.expires >= today())).slice(0, 3);
   if (!list.length) return '';
   return `<div class="card"><div class="card-head"><h3>Announcements</h3><button class="btn btn-outline btn-sm" onclick="navigate('announcements')">View all</button></div>${
-    list.map(a=>`<div class="ann-mini"><div style="font-weight:600">${a.pinned?'📌 ':''}${esc(a.title)} ${isNewAnnouncement(a)?'<span class="badge b-yellow">New</span>':''}</div><div class="small muted">${fmtDate(a.created_at)} · ${esc(annAudienceLabel(a))}</div><div class="small ann-snip">${esc(a.body.length>220?a.body.slice(0,220)+'…':a.body)}</div></div>`).join('')
+    list.map(a=>`<div class="ann-mini"><div style="font-weight:600">${a.pinned?'📌 ':''}${esc(a.title)} ${isNewAnnouncement(a)?'<span class="badge b-yellow">New</span>':''}</div><div class="small muted">${fmtDate(annPublished(a))} · ${esc(annAudienceLabel(a))}</div><div class="small ann-snip">${esc(a.body.length>220?a.body.slice(0,220)+'…':a.body)}</div></div>`).join('')
   }</div>`;
 }
 async function annForm(id){
-  const a = id ? await idbGet('announcements', id) : { audience:'all', pinned:false };
-  const aud = a.audience || 'all';
+  const a = id ? await idbGet('announcements', id) : { pinned:false };
+  const x = annAud(a);
+  const depts = [...new Set([...DEPARTMENTS, ...state.employees.map(e=>e.department).filter(Boolean)])].sort();
+  const box = (type, items) => `<div class="sig-people an-aud-box" data-type="${type}" style="${x.type===type?'':'display:none'};max-height:160px;margin-top:8px">${items.map(v=>`<label class="sig-person"><input type="checkbox" class="an-audv" value="${esc(v)}" ${x.type===type&&x.values.includes(v)?'checked':''}> ${esc(v)}</label>`).join('')}</div>`;
   openModal(`<h2>${id?'Edit':'New'} announcement</h2>
     <form onsubmit="saveAnn(event,'${id||''}')">
       <div class="form-group"><label class="req">Title</label><input id="an-title" value="${esc(a.title||'')}" required></div>
       <div class="form-group"><label class="req">Message</label><textarea id="an-body" rows="7" required>${esc(a.body||'')}</textarea></div>
       <div class="form-row">
-        <div class="form-group"><label>Who should see it</label><select id="an-aud">
-          <option value="all" ${aud==='all'?'selected':''}>Everyone</option>
-          <optgroup label="One site">${SITES.map(s=>`<option value="site:${esc(s)}" ${aud==='site:'+s?'selected':''}>${esc(s)}</option>`).join('')}</optgroup>
-          <optgroup label="One department">${DEPARTMENTS.map(d=>`<option value="dept:${esc(d)}" ${aud==='dept:'+d?'selected':''}>${esc(d)}</option>`).join('')}</optgroup>
-        </select></div>
+        <div class="form-group"><label>Link (optional)</label><input id="an-link" type="url" value="${esc(a.link||'')}" placeholder="https://…"></div>
+        <div class="form-group"><label>Link text (optional)</label><input id="an-linktext" value="${esc(a.link_text||'')}" placeholder="e.g. Read the full policy"></div>
+      </div>
+      <div class="form-group"><label>Who should see it</label><select id="an-aud" onchange="document.querySelectorAll('.an-aud-box').forEach(b=>b.style.display = b.dataset.type===this.value ? '' : 'none')">
+          <option value="all" ${x.type==='all'?'selected':''}>Everyone</option>
+          <option value="departments" ${x.type==='departments'?'selected':''}>Chosen departments</option>
+          <option value="sites" ${x.type==='sites'?'selected':''}>Chosen sites</option>
+        </select>${box('departments', depts)}${box('sites', SITES)}</div>
+      <div class="form-row">
+        <div class="form-group"><label>Publish on (optional)</label><input id="an-pub" type="date" value="${esc(a.publish_on||'')}"><div class="small muted">Leave blank to publish straight away.</div></div>
         <div class="form-group"><label>Show until (optional)</label><input id="an-exp" type="date" value="${esc(a.expires||'')}"></div>
       </div>
       <label style="display:flex;gap:8px;align-items:center;font-weight:600"><input type="checkbox" id="an-pin" ${a.pinned?'checked':''}> Pin to the top</label>
@@ -3472,10 +3696,18 @@ async function annForm(id){
 async function saveAnn(ev, id){
   ev.preventDefault();
   const existing = id ? await idbGet('announcements', id) : null;
-  const rec = { ...(existing||{}), id: id||uuid(), title: val('an-title'), body: document.getElementById('an-body').value.trim(), audience: val('an-aud'), expires: val('an-exp')||null, pinned: document.getElementById('an-pin').checked, author: existing?.author || state.user.username, created_at: existing?.created_at || nowISO(), updated_at: nowISO() };
+  const type = val('an-aud') || 'all';
+  const values = type==='all' ? [] : [...document.querySelectorAll(`.an-aud-box[data-type="${type}"] .an-audv:checked`)].map(c=>c.value);
+  if (type!=='all' && !values.length){ toast(`Tick at least one ${type==='sites'?'site':'department'}`,'error'); return; }
+  const link = val('an-link');
+  if (link && !safeLink(link)){ toast('Links must start with http:// or https://','error'); return; }
+  const pub = val('an-pub')||null, exp = val('an-exp')||null;
+  if (pub && exp && exp < pub){ toast('"Show until" is before the publish date','error'); return; }
+  const rec = { ...(existing||{}), id: id||uuid(), title: val('an-title'), body: document.getElementById('an-body').value.trim(), audience: { type, values }, link: link||null, link_text: val('an-linktext')||null,
+    publish_on: pub, expires: exp, pinned: document.getElementById('an-pin').checked, author: existing?.author || state.user.username, created_at: existing?.created_at || nowISO(), updated_at: nowISO() };
   await idbPut('announcements', rec);
-  await logAction(id?'announcement_update':'announcement_post', { detail: rec.title });
-  closeModal(); toast(id?'Announcement saved':'Announcement posted'); navigate('announcements');
+  await logAction(id?'announcement_update':'announcement_post', { detail: rec.title + (pub && pub > today() ? ` (scheduled ${pub})` : '') });
+  closeModal(); toast(id ? 'Announcement saved' : pub && pub > today() ? `Announcement scheduled for ${fmtDate(pub)}` : 'Announcement posted'); navigate('announcements');
 }
 async function deleteAnn(id){
   const a = await idbGet('announcements', id); if (!a) return;
@@ -3900,9 +4132,11 @@ function empFields(full){
     F('first','First name','text', r=>E(r).first_name),
     F('last','Last name','text', r=>E(r).last_name),
     F('director','Director','enum', r=>E(r).is_director?'Yes':'No'),
+    F('roles','Workplace roles','text', r=>(E(r).workplace_roles||[]).join(', ')),
     F('emp_type','Employment type','enum', r=>E(r).employment_type),
     F('start','Start date','date', r=>E(r).start_date),
     F('end','End date','date', r=>E(r).end_date),
+    F('leave_reason','Reason for leaving','enum', r=>E(r).leaving_reason),
     F('service','Length of service (years)','number', r=>{ const s=E(r).start_date; if(!s) return null; const ms=(new Date(E(r).end_date||today())-new Date(s)); return Math.round(ms/31557600000*10)/10; }),
     F('prob','Probation end date','date', r=>E(r).probation_end_date),
     F('dob','Date of birth','date', r=>E(r).date_of_birth),
@@ -3956,6 +4190,7 @@ const RB_SOURCES = {
       F('l_to','To','date', r=>r.l.end_date),
       F('l_days','Days','number', r=>Number(r.l.days)||0),
       F('l_half','Half day','enum', r=>r.l.half_day?'Yes':'No'),
+      F('l_sicktype','Sickness type','enum', r=>r.l.sickness_type),
       F('l_reason','Reason / notes','text', r=>r.l.reason),
       F('l_requested','Requested on','date', r=>ymdOnly(r.l.requested_at)),
       F('l_decided_by','Decided by','text', r=>r.l.decided_by),
@@ -3996,6 +4231,7 @@ const RB_SOURCES = {
     fields: () => [...empFields(false), ...[
       F('x_sick_from','Off sick from','date', r=>r.l?.start_date),
       F('x_sick_to','Off sick to','date', r=>r.l?.end_date),
+      F('x_sicktype','Sickness type','enum', r=>r.l?.sickness_type),
       F('x_days','Days off','number', r=>Number(r.l?.days)||0),
       F('x_date','Interview date','date', r=>r.x.interview_date),
       F('x_back','Returned to work','date', r=>r.x.returned_date),
@@ -4039,6 +4275,8 @@ const RB_TEMPLATES = [
   { id:'tpl-leavers', name:'Leavers in the last 12 months', source:'employees', columns:['emp_no','name','job','dept','start','end','service'], filters:[{key:'emp_status',op:'is',value:'Leaver'},{key:'end',op:'last',value:'365'}], sort:{key:'end',dir:'desc'}, group:{key:'',sum:''} },
   { id:'tpl-sickness', name:'Sickness this holiday year', source:'leave', columns:['name','dept','l_from','l_to','l_days','l_reason'], filters:[{key:'l_type',op:'is',value:'Sickness'},{key:'l_status',op:'is',value:'Approved'},{key:'l_from',op:'hy'}], sort:{key:'l_from',dir:'desc'}, group:{key:'',sum:''} },
   { id:'tpl-sick-dept', name:'Sick days by department (this holiday year)', source:'leave', columns:['name','dept','l_from','l_days'], filters:[{key:'l_type',op:'is',value:'Sickness'},{key:'l_status',op:'is',value:'Approved'},{key:'l_from',op:'hy'}], sort:{key:'dept',dir:'asc'}, group:{key:'dept',sum:'l_days'} },
+  { id:'tpl-sick-type', name:'Sickness by type (this holiday year)', source:'leave', columns:['name','dept','l_from','l_days','l_sicktype'], filters:[{key:'l_type',op:'is',value:'Sickness'},{key:'l_status',op:'is',value:'Approved'},{key:'l_from',op:'hy'}], sort:{key:'l_from',dir:'desc'}, group:{key:'l_sicktype',sum:'l_days'} },
+  { id:'tpl-leave-reasons', name:'Leavers by reason (last 12 months)', source:'employees', columns:['name','job','dept','end','leave_reason','service'], filters:[{key:'emp_status',op:'is',value:'Leaver'},{key:'end',op:'last',value:'365'}], sort:{key:'end',dir:'desc'}, group:{key:'leave_reason',sum:''} },
   { id:'tpl-bradford', name:'Bradford Factor scores', source:'employees', columns:['name','dept','sick_spells','sick_days','bradford'], filters:[{key:'bradford',op:'gt',value:'0'}], sort:{key:'bradford',dir:'desc'}, group:{key:'',sum:''} },
   { id:'tpl-training', name:'Training expiring in the next 90 days', source:'training', columns:['name','dept','t_title','t_expiry','t_status'], filters:[{key:'t_expiry',op:'next',value:'90'},{key:'emp_status',op:'not',value:'Leaver'}], sort:{key:'t_expiry',dir:'asc'}, group:{key:'',sum:''} },
   { id:'tpl-probation', name:'Probation ending in the next 60 days', source:'employees', columns:['name','job','manager','start','prob'], filters:[{key:'prob',op:'next',value:'60'},{key:'emp_status',op:'is',value:'Active'}], sort:{key:'prob',dir:'asc'}, group:{key:'',sum:''} },
@@ -4280,13 +4518,13 @@ function filterAssets(){
     (!q || `${a.name} ${a.asset_tag||''} ${a.serial||''} ${a.employee_id?empName(a.employee_id):''}`.toLowerCase().includes(q)));
   document.getElementById('asset-list').innerHTML = assetTable(list, (window._assetsAll||[]).length ? 'No assets match.' : 'No assets recorded yet. Use <strong>Add asset</strong> to start the register.');
 }
-function assetTable(list, empty, showHolder = true){
+function assetTable(list, empty, showHolder = true, canAct){   // canAct: may issue/return (defaults to HR)
   if (!list.length) return `<div class="empty small">${empty||'None.'}</div>`;
-  const hr = state.user.role==='hr_admin';
-  return `<div class="table-wrap"><table><thead><tr><th>Asset</th><th>Category</th><th>Status</th>${showHolder?'<th>Held by</th>':''}<th>Since</th>${hr?'<th></th>':''}</tr></thead><tbody>${
-    list.map(a=>`<tr><td><strong>${esc(a.name)}</strong>${assetIdText(a)?`<div class="small muted">${esc(assetIdText(a))}</div>`:''}</td><td class="small">${esc(a.category)||'—'}</td><td>${assetStatusBadge(a.status)}${a.status==='issued'&&empById(a.employee_id)?.status==='leaver'?' <span class="badge b-red">Leaver</span>':''}</td>${showHolder?`<td>${a.employee_id?esc(empName(a.employee_id)):'—'}</td>`:''}<td class="small">${a.status==='issued'?fmtDate(a.issued_date):'—'}</td>${hr?`<td style="text-align:right;white-space:nowrap">${
+  const hr = state.user.role==='hr_admin', act = canAct ?? hr;
+  return `<div class="table-wrap"><table><thead><tr><th>Asset</th><th>Category</th><th>Status</th>${showHolder?'<th>Held by</th>':''}<th>Since</th>${act?'<th></th>':''}</tr></thead><tbody>${
+    list.map(a=>`<tr><td><strong>${esc(a.name)}</strong>${assetIdText(a)?`<div class="small muted">${esc(assetIdText(a))}</div>`:''}</td><td class="small">${esc(a.category)||'—'}</td><td>${assetStatusBadge(a.status)}${a.status==='issued'&&empById(a.employee_id)?.status==='leaver'?' <span class="badge b-red">Leaver</span>':''}</td>${showHolder?`<td>${a.employee_id?esc(empName(a.employee_id)):'—'}</td>`:''}<td class="small">${a.status==='issued'?fmtDate(a.issued_date):'—'}</td>${act?`<td style="text-align:right;white-space:nowrap">${
       a.status==='issued' ? `<button class="btn btn-outline btn-sm" onclick="returnAssetForm('${a.id}')">Return</button> ` : a.status==='available' ? `<button class="btn btn-accent btn-sm" onclick="issueAssetForm('${a.id}')">Issue</button> ` : ''
-    }<button class="btn btn-outline btn-sm" onclick="assetForm('${a.id}')">Open</button></td>`:''}</tr>`).join('')
+    }${hr?`<button class="btn btn-outline btn-sm" onclick="assetForm('${a.id}')">Open</button>`:''}</td>`:''}</tr>`).join('')
   }</tbody></table></div>`;
 }
 async function assetForm(id){
@@ -4355,6 +4593,7 @@ async function issueAsset(ev){
   ev.preventDefault();
   const a = await idbGet('assets', val('ai-asset')), empId = val('ai-emp');
   if (!a || !empId){ toast('Choose an asset and a person','error'); return; }
+  if (!canDo(empId,'equipment')){ toast("You don't have permission to issue equipment to this person",'error'); return; }
   if (a.status!=='available'){ toast('That asset is not available','error'); return; }
   a.history = a.history || [];
   a.history.push({ employee_id:empId, issued_date:val('ai-date'), condition_out:val('ai-cond'), notes:val('ai-notes'), issued_by:state.user.username });
@@ -4379,6 +4618,7 @@ async function returnAssetForm(id){
 async function returnAsset(ev, id){
   ev.preventDefault();
   const a = await idbGet('assets', id); if (!a || a.status!=='issued') return;
+  if (!canDo(a.employee_id,'equipment')){ toast("You don't have permission to record this return",'error'); return; }
   const date = val('ar-date');
   if (a.issued_date && date < a.issued_date){ toast('Return date is before it was issued','error'); return; }
   const h = (a.history||[]).slice().reverse().find(x=>x.employee_id===a.employee_id && !x.returned_date);
@@ -4399,12 +4639,12 @@ async function assetsForEmployee(empId){
   return { current, past };
 }
 async function empTabEquipment(body, id){
-  const hr = state.user.role==='hr_admin';
+  const hr = state.user.role==='hr_admin', canAct = canDo(id,'equipment');
   const { current, past } = await assetsForEmployee(id);
   const leaver = empById(id)?.status==='leaver';
-  body.innerHTML = `<div class="card"><div class="card-head"><h3>Equipment issued (${current.length})</h3>${hr?`<button class="btn btn-accent btn-sm" onclick="issueAssetForm(null,'${id}')">+ Issue equipment</button>`:''}</div>
+  body.innerHTML = `<div class="card"><div class="card-head"><h3>Equipment issued (${current.length})</h3>${canAct?`<button class="btn btn-accent btn-sm" onclick="issueAssetForm(null,'${id}')">+ Issue equipment</button>`:''}</div>
       ${leaver && current.length ? '<p class="small" style="color:var(--danger);margin-bottom:10px"><strong>This person has left but still has equipment.</strong> Record each item as returned once it has been collected.</p>' : ''}
-      ${assetTable(current, 'No equipment issued.', false)}
+      ${assetTable(current, 'No equipment issued.', false, canAct)}
     </div>
     ${past.length?`<div class="card"><div class="card-head"><h3>Previously held</h3></div><div class="table-wrap"><table><thead><tr><th>Asset</th><th>Issued</th><th>Returned</th><th>Condition in</th></tr></thead><tbody>${
       past.map(({a,h})=>`<tr><td>${esc(a.name)}${assetIdText(a)?`<div class="small muted">${esc(assetIdText(a))}</div>`:''}</td><td>${fmtDate(h.issued_date)}</td><td>${fmtDate(h.returned_date)}</td><td class="small">${esc(h.condition_in||'—')}</td></tr>`).join('')
@@ -4439,6 +4679,7 @@ const AUDIT_LABELS = {
   job_history_save:'Saved job history', job_history_change:'Recorded role change', job_history_delete:'Deleted job history',
   document_upload:'Uploaded document', document_view:'Viewed document', document_update:'Updated document', document_delete:'Deleted document', document_download:'Downloaded document', document_open:'Opened document', document_acknowledged:'Confirmed read & understood',
   training_create:'Added training record', training_update:'Updated training record', training_delete:'Deleted training record', pay_document_upload:'Uploaded pay document', pay_document_open:'Opened pay document', pay_document_delete:'Deleted pay document', pay_documents_bulk_upload:'Bulk uploaded pay documents',
+  hr_note_add:'Added HR note', hr_note_delete:'Deleted HR note', hr_note_reminder_done:'Completed HR note reminder',
   report_save:'Saved custom report', report_delete:'Deleted custom report', report_export:'Exported report',
   sign_request_send:'Sent document for signature', sign_request_cancel:'Cancelled signature request', sign_request_viewed:'Opened document to sign', document_signed:'Signed document electronically', document_sign_declined:'Declined to sign document',
   asset_create:'Added asset', asset_update:'Updated asset', asset_delete:'Deleted asset', asset_issue:'Issued equipment', asset_return:'Recorded equipment return',
@@ -4559,6 +4800,8 @@ async function renderReports(c){
       <div class="table-wrap"><table id="rep-leave"><thead><tr><th>Employee</th><th>Site</th><th>Allowance</th><th>Adj</th><th>Entitlement</th><th>Taken</th><th>Booked (upcoming)</th><th>Pending</th><th>Remaining</th></tr></thead><tbody><tr><td colspan="9" class="muted">Loading…</td></tr></tbody></table></div>
     </div>
 
+    <div class="card" id="missing-data-card"></div>
+
     <div class="card"><div class="card-head"><h3>Current employees</h3><button class="btn btn-outline btn-sm" onclick="exportHeadcount()">Export CSV</button></div>
       <div class="table-wrap"><table><thead><tr><th>No.</th><th>Name</th><th>Job title</th><th>Dept</th><th>Site</th><th>Start date</th><th>Service</th></tr></thead><tbody>${
         active.sort((a,b)=>a.last_name.localeCompare(b.last_name)).map(e=>`<tr><td>${esc(e.employee_number)}</td><td>${esc(e.first_name+' '+e.last_name)}</td><td>${esc(e.job_title)}</td><td>${esc(e.department)}</td><td>${esc(e.site)}</td><td>${fmtDate(e.start_date)}</td><td>${serviceYears(e.start_date)}</td></tr>`).join('')
@@ -4573,6 +4816,45 @@ async function renderReports(c){
     rows.push(`<tr><td>${esc(e.first_name+' '+e.last_name)}</td><td>${esc(e.site)}</td><td>${b.allowance}</td><td>${b.adjustments?(b.adjustments>0?'+':'')+b.adjustments:'—'}</td><td>${b.entitlement}</td><td>${b.taken}</td><td>${b.upcoming}</td><td>${b.pending}</td><td><strong>${b.remaining}</strong></td></tr>`);
   }
   tb.innerHTML = rows.join('') || '<tr><td colspan="9" class="muted">—</td></tr>';
+  renderMissingData();
+}
+// ── Missing data: current staff whose records have gaps ──
+const MISSING_CHECKS = [
+  ['Start date',        e => !e.start_date],
+  ['Job title',         e => !e.job_title],
+  ['Department',        e => !e.department],
+  ['Site',              e => !e.site],
+  ['Line manager',      e => !e.manager_id && !e.is_director],
+  ['Date of birth',     e => !e.date_of_birth],
+  ['NI number',         e => !e.ni_number],
+  ['Home address',      e => !e.address_line1 || !e.postcode],
+  ['Personal mobile',   e => !e.mobile_phone],
+  ['Personal email',    e => !e.personal_email],
+  ['Work email',        e => !e.work_email],
+  ['Salary',            e => e.salary==null || e.salary===''],
+  ['Emergency contact', (e, ctx) => !ctx.contacts.has(e.id)]
+];
+async function missingDataRows(){
+  const ctx = { contacts: new Set((await idbGetAll('contacts')).map(c=>c.employee_id)) };
+  return state.employees.filter(e=>e.status!=='leaver').map(e => ({ e, gaps: MISSING_CHECKS.filter(([,f]) => f(e, ctx)).map(([l])=>l) })).filter(r=>r.gaps.length)
+    .sort((a,b)=>b.gaps.length-a.gaps.length || (a.e.last_name||'').localeCompare(b.e.last_name||''));
+}
+async function renderMissingData(){
+  const card = document.getElementById('missing-data-card'); if (!card) return;
+  const rows = window._missingRows = await missingDataRows();
+  const pick = window._missingPick || '';
+  const shown = pick ? rows.filter(r=>r.gaps.includes(pick)) : rows;
+  card.innerHTML = `<div class="card-head"><h3>Missing data (${rows.length} ${rows.length===1?'person':'people'})</h3><div class="doc-btns">
+      <select onchange="window._missingPick=this.value;renderMissingData()" style="padding:6px 10px;border:2px solid var(--border);border-radius:8px"><option value="">Anything missing</option>${MISSING_CHECKS.map(([l])=>`<option ${pick===l?'selected':''}>${l}</option>`).join('')}</select>
+      ${rows.length?`<button class="btn btn-outline btn-sm" onclick="exportMissingData()">Export CSV</button>`:''}</div></div>
+    ${shown.length ? `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Department</th><th>Missing</th><th></th></tr></thead><tbody>${
+      shown.map(({e,gaps})=>`<tr><td>${esc(e.first_name+' '+e.last_name)}</td><td class="small">${esc(e.department)||'—'}</td><td>${gaps.map(g=>`<span class="badge ${g===pick?'b-red':'b-amber'}">${esc(g)}</span>`).join(' ')}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="employeeDetail('${e.id}')">Open</button></td></tr>`).join('')
+    }</tbody></table></div>` : `<div class="empty small">${rows.length?'Nobody is missing that.':'Every current employee record is complete.'}</div>`}`;
+}
+function exportMissingData(){
+  const rows = [['Employee','Number','Department','Site', ...MISSING_CHECKS.map(([l])=>l)]];
+  (window._missingRows||[]).forEach(({e,gaps}) => rows.push([e.first_name+' '+e.last_name, e.employee_number||'', e.department||'', e.site||'', ...MISSING_CHECKS.map(([l])=>gaps.includes(l)?'Missing':'')]));
+  downloadCSV('komfort-missing-data.csv', rows);
 }
 function serviceYears(start){ return serviceYM(start); }
 function exportHeadcount(){
@@ -4721,6 +5003,14 @@ async function renderSettings(c){
       <div class="form-group"><label>Holiday year starts (MM-DD)</label><input id="set-hys" value="${esc(hys)}" placeholder="01-01"><div class="small muted">e.g. 01-01 for calendar year, 04-01 for April start.</div></div>
       <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
     </div>
+    <div class="card" style="max-width:720px">
+      <div class="card-head"><h3>What line managers can see and do</h3><span class="small muted">For their own direct reports</span></div>
+      <div class="table-wrap"><table><thead><tr><th>Area</th><th style="text-align:center">View</th><th style="text-align:center">Manage</th><th style="text-align:center">Delete</th></tr></thead><tbody>${
+        MGR_AREAS.map(([k,label,d])=>`<tr><td>${esc(label)}</td>${['view','manage','delete'].map(a=>`<td style="text-align:center">${d[a]===null?'<span class="muted">—</span>':`<input type="checkbox" class="mp" data-area="${k}" data-act="${a}" ${state.mgrPerms[k][a]?'checked':''} style="width:18px;height:18px">`}</td>`).join('')}</tr>`).join('')
+      }</tbody></table></div>
+      <p class="small muted" style="margin:10px 0">"Manage" means recording, approving and editing (e.g. booking holiday, recording sickness and return-to-work, issuing equipment). Salary, bank details, pay documents, HR notes and holiday adjustments are always HR only.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-primary" onclick="saveMgrPerms()">Save permissions</button><button class="btn btn-outline" onclick="resetMgrPerms()">Reset to defaults</button></div>
+    </div>
     <div class="card" style="max-width:560px">
       <div class="card-head"><h3>Data</h3></div>
       <p class="small muted">All data is stored locally in this browser (IndexedDB). Use export to back up, or reset to clear everything.</p>
@@ -4731,6 +5021,21 @@ async function renderSettings(c){
     </div>`;
 }
 async function saveSettings(){ await setSetting('company_name', val('set-cn')); await setSetting('holiday_year_start', val('set-hys')||'01-01'); await logAction('settings_update', { detail:`Holiday year starts ${val('set-hys')||'01-01'}` }); toast('Settings saved'); }
+async function saveMgrPerms(){
+  const p = mgrPermDefaults();
+  document.querySelectorAll('.mp').forEach(cb => { p[cb.dataset.area][cb.dataset.act] = cb.checked; });
+  // Manage or delete without view makes no sense — tick view automatically
+  Object.values(p).forEach(x => { if ((x.manage || x.delete) && x.view===false) x.view = true; });
+  await setSetting('mgr_perms', p); await refreshCaches();
+  await logAction('settings_update', { detail: 'Line manager permissions changed' });
+  toast('Line manager permissions saved'); navigate('settings');
+}
+async function resetMgrPerms(){
+  if (!confirm('Reset line manager permissions to the defaults?')) return;
+  await setSetting('mgr_perms', null); await refreshCaches();
+  await logAction('settings_update', { detail: 'Line manager permissions reset to defaults' });
+  toast('Permissions reset'); navigate('settings');
+}
 async function exportAllData(){
   const dump = {};
   for (const s of STORES) dump[s] = await idbGetAll(s);
@@ -4863,7 +5168,7 @@ async function renderMySickness(c){
     </div>
     <div class="card"><div class="card-head"><h3>My sickness</h3></div>
       ${sickness.length?`<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Days</th><th>Reason / notes</th><th>Return to work</th></tr></thead><tbody>${
-        sickness.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${esc(l.reason)||'—'}</td><td>${done.has(l.id)?`<button class="btn btn-outline btn-sm" onclick="rtwForm('${l.id}')">View</button>`:'<span class="small muted">—</span>'}</td></tr>`).join('')
+        sickness.map(l=>`<tr><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td class="small">${sickTag(l)}${esc(l.reason)||'—'}</td><td>${done.has(l.id)?`<button class="btn btn-outline btn-sm" onclick="rtwForm('${l.id}')">View</button>`:'<span class="small muted">—</span>'}</td></tr>`).join('')
       }</tbody></table></div>`:`<div class="empty small">No sickness recorded${per.bounds?' in '+esc(per.label):''}. Sickness is logged by HR or your manager.</div>`}
     </div>`;
 }

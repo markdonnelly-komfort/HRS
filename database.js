@@ -68,6 +68,8 @@ function initializeSchema() {
       work_phone TEXT,
       work_mobile TEXT,
       is_director INTEGER DEFAULT 0,
+      workplace_roles TEXT,          -- JSON array, e.g. ["First aider","Fire warden"]
+      leaving_reason TEXT,
       job_title TEXT,
       department TEXT,
       site TEXT,
@@ -126,6 +128,8 @@ function initializeSchema() {
       description TEXT,
       ack INTEGER DEFAULT 0,
       ack_deadline TEXT,
+      audience TEXT,                 -- JSON {type: all|managers|hr|departments|sites|people, values: [...]}
+      review_date TEXT,
       uploaded_by TEXT,
       uploaded_at TEXT DEFAULT (datetime('now'))
     )
@@ -247,6 +251,20 @@ function initializeSchema() {
     )
   `);
   db.run('CREATE INDEX IF NOT EXISTS idx_sign_requests_emp ON sign_requests(employee_id)');
+  // HR-only notes on a person, with an optional reminder date
+  db.run(`
+    CREATE TABLE IF NOT EXISTS hr_notes (
+      id TEXT PRIMARY KEY,
+      employee_id TEXT NOT NULL REFERENCES employees(id),
+      text TEXT NOT NULL,
+      reminder_date TEXT,
+      reminder_done INTEGER DEFAULT 0,
+      reminder_done_at TEXT,
+      created_by TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+  db.run('CREATE INDEX IF NOT EXISTS idx_hr_notes_emp ON hr_notes(employee_id)');
   // Saved report-builder definitions (columns / filters / sort / grouping as JSON)
   db.run(`
     CREATE TABLE IF NOT EXISTS saved_reports (
@@ -299,7 +317,10 @@ function initializeSchema() {
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
       body TEXT,
-      audience TEXT DEFAULT 'all',
+      audience TEXT DEFAULT 'all',   -- JSON {type: all|departments|sites, values: [...]}
+      link TEXT,
+      link_text TEXT,
+      publish_on TEXT,
       pinned INTEGER DEFAULT 0,
       expires TEXT,
       author TEXT,
@@ -318,6 +339,7 @@ function initializeSchema() {
       half_day INTEGER DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected','cancelled')),
       reason TEXT,
+      sickness_type TEXT,
       requested_at TEXT DEFAULT (datetime('now')),
       decided_by TEXT,
       decided_at TEXT,
