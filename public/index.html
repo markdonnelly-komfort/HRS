@@ -183,6 +183,10 @@
     .doc-row { flex-wrap: wrap; }
     .doc-row .doc-btns { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
     .ack-banner { border-left: 5px solid var(--accent); background: #fffbea; }
+    .le-list { display: flex; flex-direction: column; gap: 6px; }
+    .le-row { display: flex; gap: 6px; align-items: center; }
+    .le-row input { flex: 1; min-width: 0; padding: 7px 10px; border: 2px solid var(--border); border-radius: 8px; font-size: 0.9rem; }
+    .le-row .btn { padding: 5px 9px; }
     .hr-note { padding: 12px 0; border-bottom: 1px solid var(--border); }
     .hr-note:last-child { border-bottom: 0; }
     .hr-note-text { white-space: pre-wrap; margin-top: 4px; overflow-wrap: anywhere; }
@@ -508,8 +512,12 @@ async function logAction(action, details={}){ try{ await idbAdd('audit_log', { t
 // ═══════════════════════════════════════════════
 // SETTINGS / CONSTANTS
 // ═══════════════════════════════════════════════
-const SITES = ['Leeds','Axcess-10','Crawley'];
-const DEPARTMENTS = ['Operations','Manufacturing','Sales','Finance','HR','Design','Installation','Logistics','Management'];
+// Locations and departments are edited by HR in Settings (stored as settings 'sites' / 'departments');
+// these are the starting lists, matching Komfort's Breathe set-up.
+const DEFAULT_SITES = ['Axcess 10','Crawley','Leeds','Work from Home'];
+const DEFAULT_DEPARTMENTS = ['Architectural Firescreens','Balustrades and Handrails','Contracts and Projects','Customer Service','Estimating','Finance','Health, Safety & Business Conformance','Human Resources','IT','New Product Development & Technical','Operations - Midlands','Operations - Sonik, Assembly & Fabrication','Operations - Southern Warehouse','Operations - Steel/Press','Operations - Warehouse & Paintline','Sales - Field Based','Sales - SOP & Factored','Supply Chain & Purchasing','Transport & Logistics - Midlands/North','Transport & Logistics - South'];
+let SITES = [...DEFAULT_SITES];
+let DEPARTMENTS = [...DEFAULT_DEPARTMENTS];
 const LEAVE_TYPES = {
   holiday:      { label:'Holiday',             deducts:true,  colour:'b-blue'  },
   sickness:     { label:'Sickness',            deducts:false, colour:'b-red'   },
@@ -588,10 +596,10 @@ async function seedDefaults(){
     photo:null, notes:'', created_at:nowISO(), updated_at:nowISO()
   });
   const emps = [
-    mk(mgrId,{ttl:'Mrs',num:'KP-001',fn:'Sarah',ln:'Mitchell',dob:'1980-04-12',g:'Female',ni:'AB123456C',a1:'14 Mill Lane',city:'Leeds',pc:'LS10 1AB',we:'s.mitchell@komfort.com',pe:'sarah.m@gmail.com',mob:'07700 900111',wp:'0113 496 0101',wm:'07700 900901',roles:['Fire warden','Key holder'],jt:'Operations Manager',dept:'Management',site:'Leeds',type:'Permanent',hours:39,notice:'3 months',start:'2015-03-01',sal:62000,hol:28}),
-    mk(empId,{ttl:'Mr',num:'KP-014',fn:'James',ln:'Okafor',dob:'1992-09-23',g:'Male',ni:'CD654321B',a1:'5 Beech Road',city:'Leeds',pc:'LS11 4QT',we:'j.okafor@komfort.com',pe:'jokafor@outlook.com',mob:'07700 900222',roles:['First aider','Mental health first aider'],jt:'Production Operative',dept:'Manufacturing',site:'Leeds',mgr:mgrId,type:'Permanent',hours:39,notice:'1 month',start:'2021-06-14',sal:31000,hol:25}),
-    mk(e3,{ttl:'Ms',num:'KP-022',fn:'Priya',ln:'Sharma',dob:'1995-01-30',g:'Female',ni:'EF112233A',a1:'88 Oak Avenue',city:'Crawley',pc:'RH10 8GH',we:'p.sharma@komfort.com',mob:'07700 900333',jt:'Sales Executive',dept:'Sales',site:'Crawley',mgr:mgrId,type:'Contract',hours:37.5,notice:'1 month',start:addDays(today(),-160),prob:addDays(today(),20),sal:34000,hol:25}),
-    mk(e4,{ttl:'Mr',num:'KP-009',fn:'David',ln:'Thompson',dob:'1975-11-05',g:'Male',ni:'GH445566D',a1:'3 Station Close',city:'Leeds',pc:'LS9 7RR',we:'d.thompson@komfort.com',mob:'07700 900444',wm:'07700 900944',roles:['First aider'],jt:'Senior Installer',dept:'Installation',site:'Axcess-10',mgr:mgrId,type:'Permanent',hours:42,notice:'1 month',start:'2018-08-13',sal:38000,hol:26}),
+    mk(mgrId,{ttl:'Mrs',num:'KP-001',fn:'Sarah',ln:'Mitchell',dob:'1980-04-12',g:'Female',ni:'AB123456C',a1:'14 Mill Lane',city:'Leeds',pc:'LS10 1AB',we:'s.mitchell@komfort.com',pe:'sarah.m@gmail.com',mob:'07700 900111',wp:'0113 496 0101',wm:'07700 900901',roles:['Fire warden','Key holder'],jt:'Operations Manager',dept:'Operations - Warehouse & Paintline',site:'Leeds',type:'Permanent',hours:39,notice:'3 months',start:'2015-03-01',sal:62000,hol:28}),
+    mk(empId,{ttl:'Mr',num:'KP-014',fn:'James',ln:'Okafor',dob:'1992-09-23',g:'Male',ni:'CD654321B',a1:'5 Beech Road',city:'Leeds',pc:'LS11 4QT',we:'j.okafor@komfort.com',pe:'jokafor@outlook.com',mob:'07700 900222',roles:['First aider','Mental health first aider'],jt:'Production Operative',dept:'Operations - Warehouse & Paintline',site:'Leeds',mgr:mgrId,type:'Permanent',hours:39,notice:'1 month',start:'2021-06-14',sal:31000,hol:25}),
+    mk(e3,{ttl:'Ms',num:'KP-022',fn:'Priya',ln:'Sharma',dob:'1995-01-30',g:'Female',ni:'EF112233A',a1:'88 Oak Avenue',city:'Crawley',pc:'RH10 8GH',we:'p.sharma@komfort.com',mob:'07700 900333',jt:'Sales Executive',dept:'Sales - Field Based',site:'Crawley',mgr:mgrId,type:'Contract',hours:37.5,notice:'1 month',start:addDays(today(),-160),prob:addDays(today(),20),sal:34000,hol:25}),
+    mk(e4,{ttl:'Mr',num:'KP-009',fn:'David',ln:'Thompson',dob:'1975-11-05',g:'Male',ni:'GH445566D',a1:'3 Station Close',city:'Leeds',pc:'LS9 7RR',we:'d.thompson@komfort.com',mob:'07700 900444',wm:'07700 900944',roles:['First aider'],jt:'Senior Installer',dept:'Contracts and Projects',site:'Axcess 10',mgr:mgrId,type:'Permanent',hours:42,notice:'1 month',start:'2018-08-13',sal:38000,hol:26}),
     mk(e5,{ttl:'Mrs',num:'KP-005',fn:'Linda',ln:'Carter',dob:'1988-07-19',g:'Female',ni:'IJ778899E',a1:'21 Elmwood Drive',city:'Leeds',pc:'LS12 2AA',we:'l.carter@komfort.com',mob:'07700 900555',jt:'Finance Assistant',dept:'Finance',site:'Leeds',mgr:mgrId,type:'Casual',hours:22.5,notice:'1 week',start:'2019-10-01',end:'2025-12-31',lr:'Resigned',status:'leaver',sal:29000,hol:20})
   ];
   for (const e of emps) await idbPut('employees', e);
@@ -669,8 +677,8 @@ async function seedDefaults(){
   await idbPut('doc_acks', { id:hsDoc+':'+e3, document_id:hsDoc, employee_id:e3, acknowledged_at:nowISO(), user:'demo' });
 
   // Sample job history (James was promoted from trainee)
-  await idbPut('jobs', { id:uuid(), employee_id:empId, job_title:'Trainee Production Operative', department:'Manufacturing', site:'Leeds', employment_type:'Permanent', start_date:'2021-06-14', end_date:'2023-03-31', reason:'Joined', notes:'', created_at:nowISO() });
-  await idbPut('jobs', { id:uuid(), employee_id:empId, job_title:'Production Operative', department:'Manufacturing', site:'Leeds', employment_type:'Permanent', start_date:'2023-04-01', end_date:null, reason:'Promotion', notes:'Completed traineeship', created_at:nowISO() });
+  await idbPut('jobs', { id:uuid(), employee_id:empId, job_title:'Trainee Production Operative', department:'Operations - Warehouse & Paintline', site:'Leeds', employment_type:'Permanent', start_date:'2021-06-14', end_date:'2023-03-31', reason:'Joined', notes:'', created_at:nowISO() });
+  await idbPut('jobs', { id:uuid(), employee_id:empId, job_title:'Production Operative', department:'Operations - Warehouse & Paintline', site:'Leeds', employment_type:'Permanent', start_date:'2023-04-01', end_date:null, reason:'Promotion', notes:'Completed traineeship', created_at:nowISO() });
 
   // Sample one-to-ones
   await idbPut('one_to_ones', { id:uuid(), employee_id:empId, with_id:mgrId, type:'Monthly', date:addDays(today(),6), time:'10:00', location:'Leeds', agenda:'Monthly catch-up: workload and training plan', status:'scheduled', notes:'', actions:'', private_notes:'', employee_notes:'', requested_by:'manager', created_at:nowISO() });
@@ -752,6 +760,9 @@ async function refreshCaches(){
   state.usersById = {}; users.forEach(u => state.usersById[u.id] = u);
   state.companyDays = (await idbGetAll('company_days')).sort((a,b)=>a.date.localeCompare(b.date));
   state.closedDays = new Set(state.companyDays.map(c=>c.date));
+  // HR-edited lists of locations and departments
+  SITES = (await getSetting('sites', null)) || [...DEFAULT_SITES];
+  DEPARTMENTS = (await getSetting('departments', null)) || [...DEFAULT_DEPARTMENTS];
   // Saved manager permissions merged over the defaults (so new areas get their default)
   const saved = await getSetting('mgr_perms', null), defs = mgrPermDefaults();
   if (saved) Object.keys(defs).forEach(k => { if (saved[k]) Object.keys(defs[k]).forEach(a => { if (defs[k][a]!==null && typeof saved[k][a]==='boolean') defs[k][a] = saved[k][a]; }); });
@@ -3208,7 +3219,7 @@ function calPerson(id){
 // none) or scheduled directly by the manager / HR. Shared notes and actions
 // are visible to the employee; private notes only to the manager and HR.
 const ONE_TO_ONE_TYPES = ['Weekly','Monthly','Quarterly','Half year','Annual','Probation review','Formal','Informal'];
-const MEETING_LOCATIONS = [...SITES, 'Microsoft Teams', 'Phone', 'Other'];
+const meetingLocations = () => [...SITES, 'Microsoft Teams', 'Phone', 'Other'];
 function ooStatusBadge(s){ const m={requested:['Requested','b-amber'],scheduled:['Scheduled','b-blue'],completed:['Completed','b-green'],declined:['Declined','b-red'],cancelled:['Cancelled','b-grey']}; const [t,c]=m[s]||[s,'b-grey']; return `<span class="badge ${c}">${t}</span>`; }
 function canRunOneToOne(o){
   if (o.employee_id===state.user.employee_id) return false;
@@ -3261,7 +3272,7 @@ async function oneToOneForm(opts={}){
   const meeting = `
     <div class="form-row">
       <div class="form-group"><label>Type</label><select id="oo-type" ${lock}>${optionList(ONE_TO_ONE_TYPES, r.type)}</select></div>
-      <div class="form-group"><label>Location</label><select id="oo-loc" ${lock}><option value="">—</option>${optionList(MEETING_LOCATIONS, r.location)}</select></div>
+      <div class="form-group"><label>Location</label><select id="oo-loc" ${lock}><option value="">—</option>${optionList(meetingLocations(), r.location)}</select></div>
     </div>
     <div class="form-row">
       <div class="form-group"><label class="${mode==='request'?'':'req'}">${mode==='request'?'Preferred date':'Date'}</label><input id="oo-date" type="date" value="${esc(r.date||'')}" ${lock} ${mode==='request'?'':'required'}></div>
@@ -5003,6 +5014,14 @@ async function renderSettings(c){
       <div class="form-group"><label>Holiday year starts (MM-DD)</label><input id="set-hys" value="${esc(hys)}" placeholder="01-01"><div class="small muted">e.g. 01-01 for calendar year, 04-01 for April start.</div></div>
       <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
     </div>
+    <div class="card" style="max-width:980px">
+      <div class="card-head"><h3>Locations &amp; departments</h3><span class="small muted">Used on employee records, filters, documents and announcements</span></div>
+      <div class="form-row" style="align-items:start">
+        <div style="min-width:0"><h4 style="margin-bottom:8px">Locations</h4>${listEditorHtml('sites')}</div>
+        <div style="min-width:0"><h4 style="margin-bottom:8px">Departments</h4>${listEditorHtml('departments')}</div>
+      </div>
+      <p class="small muted" style="margin-top:12px">Renaming one updates everyone already in it. One that people are still in can't be removed until they're moved.</p>
+    </div>
     <div class="card" style="max-width:720px">
       <div class="card-head"><h3>What line managers can see and do</h3><span class="small muted">For their own direct reports</span></div>
       <div class="table-wrap"><table><thead><tr><th>Area</th><th style="text-align:center">View</th><th style="text-align:center">Manage</th><th style="text-align:center">Delete</th></tr></thead><tbody>${
@@ -5021,6 +5040,54 @@ async function renderSettings(c){
     </div>`;
 }
 async function saveSettings(){ await setSetting('company_name', val('set-cn')); await setSetting('holiday_year_start', val('set-hys')||'01-01'); await logAction('settings_update', { detail:`Holiday year starts ${val('set-hys')||'01-01'}` }); toast('Settings saved'); }
+// ── Locations & departments lists (HR) ──
+const LIST_KINDS = { sites:{ label:'Locations', field:'site', one:'location' }, departments:{ label:'Departments', field:'department', one:'department' } };
+function listEditorHtml(kind){
+  const items = kind==='sites' ? SITES : DEPARTMENTS;
+  const counts = {}; state.employees.forEach(e => { const v = e[LIST_KINDS[kind].field]; if (v) counts[v] = (counts[v]||0) + 1; });
+  return `<div class="le-list" id="le-${kind}">${items.map(v=>leRow(v, counts[v]||0)).join('')}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      <button class="btn btn-outline btn-sm" onclick="leAdd('${kind}')">+ Add ${LIST_KINDS[kind].one}</button>
+      <button class="btn btn-outline btn-sm" onclick="leSort('${kind}')">Sort A–Z</button>
+      <button class="btn btn-primary btn-sm" onclick="saveList('${kind}')">Save ${LIST_KINDS[kind].label.toLowerCase()}</button>
+    </div>`;
+}
+const leRow = (v, n) => `<div class="le-row" data-orig="${esc(v)}"><input value="${esc(v)}" placeholder="Name"><span class="small muted" style="white-space:nowrap">${n?`${n} ${n===1?'person':'people'}`:''}</span><button class="btn btn-outline btn-sm" title="Move up" onclick="leMove(this,-1)">↑</button><button class="btn btn-outline btn-sm" title="Move down" onclick="leMove(this,1)">↓</button><button class="btn btn-danger btn-sm" title="Remove" onclick="this.closest('.le-row').remove()">×</button></div>`;
+function leAdd(kind){ const box = document.getElementById('le-'+kind); box.insertAdjacentHTML('beforeend', leRow('',0)); box.lastElementChild.dataset.orig = ''; box.lastElementChild.querySelector('input').focus(); }
+function leMove(btn, d){ const row = btn.closest('.le-row'), sib = d<0 ? row.previousElementSibling : row.nextElementSibling; if (!sib) return; d<0 ? row.parentNode.insertBefore(row, sib) : row.parentNode.insertBefore(sib, row); }
+function leSort(kind){ const box = document.getElementById('le-'+kind); [...box.children].sort((a,b)=>a.querySelector('input').value.localeCompare(b.querySelector('input').value)).forEach(r=>box.appendChild(r)); }
+// Change a location/department value everywhere it's stored
+async function renameListValue(kind, from, to){
+  const field = LIST_KINDS[kind].field, audType = kind;   // audiences use 'sites' / 'departments'
+  let n = 0;
+  for (const store of ['employees','jobs']) for (const r of await idbGetAll(store)) if (r[field]===from){ r[field] = to; await idbPut(store, r); if (store==='employees') n++; }
+  for (const d of (await idbGetAll('documents')).filter(d=>d.audience?.type===audType && (d.audience.values||[]).includes(from))){ d.audience.values = d.audience.values.map(v=>v===from?to:v); await idbPut('documents', d); }
+  for (const a of await idbGetAll('announcements')){ const x = annAud(a); if (x.type===audType && x.values.includes(from)){ a.audience = { type:x.type, values:x.values.map(v=>v===from?to:v) }; await idbPut('announcements', a); } }
+  return n;
+}
+async function saveList(kind){
+  const rows = [...document.querySelectorAll(`#le-${kind} .le-row`)].map(r => ({ orig: r.dataset.orig || '', val: r.querySelector('input').value.trim() }));
+  if (rows.some(r=>!r.val)){ toast('Fill in or remove the blank row','error'); return; }
+  const lower = rows.map(r=>r.val.toLowerCase());
+  const dup = rows.find((r,i)=>lower.indexOf(r.val.toLowerCase())!==i); if (dup){ toast(`"${dup.val}" is in the list twice`,'error'); return; }
+  const before = kind==='sites' ? SITES : DEPARTMENTS, field = LIST_KINDS[kind].field;
+  // Removing one that people are still in isn't allowed — they'd be left without a valid value
+  const kept = new Set(rows.map(r=>r.orig).filter(Boolean));
+  const inUse = before.filter(v=>!kept.has(v)).map(v=>[v, state.employees.filter(e=>e[field]===v).length]).filter(([,n])=>n);
+  if (inUse.length){ toast(`Can't remove ${inUse.map(([v,n])=>`"${v}" (${n} ${n===1?'person':'people'})`).join(', ')} — move them to another ${LIST_KINDS[kind].one} first, or rename it instead`,'error'); return; }
+  let moved = 0; const renames = rows.filter(r=>r.orig && r.orig!==r.val);
+  for (const r of renames) moved += await renameListValue(kind, r.orig, r.val);
+  await setSetting(kind, rows.map(r=>r.val)); await refreshCaches();
+  await logAction('settings_update', { detail: `${LIST_KINDS[kind].label} list updated${renames.length?' · renamed '+renames.map(r=>`${r.orig} → ${r.val}`).join(', '):''}` });
+  toast(`${LIST_KINDS[kind].label} saved${moved?` · ${moved} employee record${moved!==1?'s':''} updated`:''}`); navigate('settings');
+}
+// One-off: the old "Axcess-10" location becomes "Axcess 10" to match the new list
+async function migrateLocationNames(){
+  if (await getSetting('lists_v1', false)) return;
+  await refreshCaches();
+  if ((await idbGetAll('employees')).length) await renameListValue('sites', 'Axcess-10', 'Axcess 10');
+  await setSetting('lists_v1', true);
+}
 async function saveMgrPerms(){
   const p = mgrPermDefaults();
   document.querySelectorAll('.mp').forEach(cb => { p[cb.dataset.area][cb.dataset.act] = cb.checked; });
@@ -5235,6 +5302,7 @@ async function saveMyPassword(ev){
 (async function init(){
   await openDB();
   await seedDefaults();
+  await migrateLocationNames();
   const sid = sessionStorage.getItem('hr_session');
   if (sid){
     const u = await idbGet('users', sid);
