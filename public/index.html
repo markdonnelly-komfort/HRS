@@ -187,6 +187,12 @@
     .le-row { display: flex; gap: 6px; align-items: center; }
     .le-row input { flex: 1; min-width: 0; padding: 7px 10px; border: 2px solid var(--border); border-radius: 8px; font-size: 0.9rem; }
     .le-row .btn { padding: 5px 9px; }
+    .th-sort { white-space: nowrap; }
+    .sort-btns { display: inline-flex; flex-direction: column; vertical-align: middle; margin-left: 4px; }
+    .sort-btns button { border: 0; background: none; padding: 0 3px; font-size: 0.68rem; line-height: 1.1; color: #9aa0a6; cursor: pointer; }
+    .sort-btns button:hover { color: var(--primary); }
+    .sort-btns button.on { color: var(--primary); font-weight: 700; }
+    .photo-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; }
     .hr-note { padding: 12px 0; border-bottom: 1px solid var(--border); }
     .hr-note:last-child { border-bottom: 0; }
     .hr-note-text { white-space: pre-wrap; margin-top: 4px; overflow-wrap: anywhere; }
@@ -747,7 +753,7 @@ function leaverAccessText(e){
 
 function logout(){
   if (state.user) logAction('logout');
-  state.user = null; state.leaver = null; window._holYear = null; window._absPeriod = null;
+  state.user = null; state.leaver = null; window._holYear = null; window._absPeriod = null; window._hf = null;
   sessionStorage.removeItem('hr_session');
   document.getElementById('app').classList.remove('active');
   document.getElementById('login-view').style.display = 'flex';
@@ -1741,7 +1747,7 @@ function employeeForm(id){
         <div class="form-row-3">
           <div class="form-group"><label>Salary (£/yr)</label><input id="f-sal" type="number" value="${e.salary??''}"></div>
           <div class="form-group"><label>Holiday allowance (days)</label><input id="f-hol" type="number" value="${e.holiday_allowance??DEFAULT_ALLOWANCE}"></div>
-          <div class="form-group"><label>Photo</label><input id="f-photo" type="file" accept="image/*"></div>
+          <div class="form-group"><label>Photo <span class="small muted">(optional)</span></label>${e.photo?`<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">${avatarHtml(e)}<label style="display:inline-flex;gap:6px;align-items:center;font-weight:400"><input type="checkbox" id="f-photo-remove"> Remove photo</label></div>`:''}<input id="f-photo" type="file" accept="image/*"></div>
         </div>
         <div class="form-row">
           <div class="form-group"><label>Bank sort code</label><input id="f-sort" value="${esc(e.bank_sort_code||'')}"></div>
@@ -1761,7 +1767,8 @@ async function saveEmployee(ev, id){
   const existing = id ? empById(id) : null;
   let photo = existing?.photo || null;
   const fileEl = document.getElementById('f-photo');
-  if (fileEl.files[0]) photo = await fileToDataURL(fileEl.files[0]);
+  if (fileEl.files[0]){ photo = await photoFromFile(fileEl.files[0]); if (!photo) return; }
+  else if (document.getElementById('f-photo-remove')?.checked) photo = null;
   const rec = {
     id: id || uuid(),
     title: val('f-title'),
@@ -1797,6 +1804,41 @@ async function saveEmployee(ev, id){
   if (roleChange) jobChangePrompt(rec.id, existing);
 }
 function fileToDataURL(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); }); }
+// Profile photos: crop to a centred square and shrink to 300px JPEG so they stay small
+async function photoFromFile(file){
+  if (!file.type.startsWith('image/')){ toast('Please choose an image file','error'); return null; }
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(file); });
+    const side = Math.min(img.naturalWidth, img.naturalHeight), size = Math.min(300, side);
+    const cv = document.createElement('canvas'); cv.width = cv.height = size;
+    cv.getContext('2d').drawImage(img, (img.naturalWidth-side)/2, (img.naturalHeight-side)/2, side, side, 0, 0, size, size);
+    URL.revokeObjectURL(img.src);
+    return cv.toDataURL('image/jpeg', 0.85);
+  } catch(e){ toast("That image couldn't be read — try a JPG or PNG",'error'); return null; }
+}
+// Staff can add, change or remove their own photo from My Profile
+function myPhotoForm(){
+  const e = empById(state.user.employee_id); if (!e) return;
+  openModal(`<h2>My photo</h2><div class="modal-sub">Shown on your profile and the organisation chart. Optional.</div>
+    <div style="display:flex;gap:16px;align-items:center;margin-bottom:14px">${avatarHtml(e,true)}<div class="small muted">Choose a clear head-and-shoulders photo. It's cropped to a square automatically.</div></div>
+    <form onsubmit="saveMyPhoto(event)">
+      <div class="form-group"><input id="mp-file" type="file" accept="image/*" required></div>
+      <div class="modal-actions">${e.photo?`<button type="button" class="btn btn-danger" style="margin-right:auto" onclick="removeMyPhoto()">Remove photo</button>`:''}<button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save photo</button></div>
+    </form>`);
+}
+async function saveMyPhoto(ev){
+  ev.preventDefault();
+  const photo = await photoFromFile(document.getElementById('mp-file').files[0]); if (!photo) return;
+  const e = await idbGet('employees', state.user.employee_id); e.photo = photo; e.updated_at = nowISO();
+  await idbPut('employees', e); await logAction('my_photo_update', { employee_id:e.id });
+  closeModal(); toast('Photo saved'); navigate('my-profile');
+}
+async function removeMyPhoto(){
+  if (!confirm('Remove your photo?')) return;
+  const e = await idbGet('employees', state.user.employee_id); e.photo = null; e.updated_at = nowISO();
+  await idbPut('employees', e); await logAction('my_photo_update', { employee_id:e.id, detail:'removed' });
+  closeModal(); toast('Photo removed'); navigate('my-profile');
+}
 
 // ── Contacts ──
 async function contactForm(empId, contactId){
@@ -1963,13 +2005,57 @@ async function renderLeave(c, category){
     </div>`:''}
     ${sickExtra}
     ${per ? per.html : ''}
-    <div class="card">
+    ${category==='holiday' ? holidayRecordsCardHtml(records) : `<div class="card">
       <div class="card-head"><h3>${meta.recTitle}${per?` <span class="small muted">· ${esc(per.label)}</span>`:''}</h3></div>
       ${records.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th>${typeCol}<th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${rtwCol}</tr></thead><tbody>${
         records.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td>${typeCell(l)}<td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusCell(l)}</td><td class="small">${sickTag(l)}${esc(l.reason)||'—'}</td>${rtwTd(l)}</tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">No records.</div>'}
-    </div>`;
+    </div>`}`;
+  if (category==='holiday') drawHolidayRecords();
 }
+// ── Holiday bookings list: filter by employee / month / year, sort by column ──
+// window._hf keeps the choices while you move around (reset on sign-out).
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+function holidayRecordsCardHtml(records){
+  window._holRecs = records;
+  const f = window._hf = window._hf || { emp:'', month:'', year:'', sort:'from', dir:'desc' };
+  const emps = [...new Set(records.map(l=>l.employee_id))].map(id=>[id, empName(id)]).sort((a,b)=>a[1].localeCompare(b[1]));
+  const years = [...new Set(records.flatMap(l=>[l.start_date.slice(0,4), l.end_date.slice(0,4)]))].sort().reverse();
+  if (f.emp && !emps.some(([id])=>id===f.emp)) f.emp = '';
+  const sel = (prop, opts) => `<select onchange="setHolFilter('${prop}',this.value)"><option value="">${prop==='emp'?'All employees':prop==='month'?'All months':'All years'}</option>${opts.map(([v,t])=>`<option value="${esc(v)}" ${f[prop]===v?'selected':''}>${esc(t)}</option>`).join('')}</select>`;
+  return `<div class="card">
+    <div class="card-head"><h3>Holiday bookings</h3><span class="small muted" id="hol-recs-count"></span></div>
+    <div class="toolbar">${sel('emp', emps)}${sel('month', MONTHS.map((m,i)=>[String(i+1).padStart(2,'0'), m]))}${sel('year', years.map(y=>[y,y]))}
+      ${f.emp||f.month||f.year?`<button class="btn btn-outline btn-sm" onclick="window._hf={...window._hf,emp:'',month:'',year:''};navigate(state.page)">Clear filters</button>`:''}</div>
+    <div id="hol-recs"></div>
+  </div>`;
+}
+// Does a booking touch the chosen month and/or year?
+function bookingInPeriod(l, month, year){
+  if (!month && !year) return true;
+  let ym = l.start_date.slice(0,7); const end = l.end_date.slice(0,7);
+  while (ym <= end){
+    const [y, m] = ym.split('-');
+    if ((!year || y===year) && (!month || m===month)) return true;
+    ym = m==='12' ? `${+y+1}-01` : `${y}-${String(+m+1).padStart(2,'0')}`;
+  }
+  return false;
+}
+function drawHolidayRecords(){
+  const box = document.getElementById('hol-recs'); if (!box) return;
+  const f = window._hf;
+  const keyOf = { emp: l => empName(l.employee_id).toLowerCase(), from: l => l.start_date, to: l => l.end_date, status: l => l.status };
+  const list = (window._holRecs||[]).filter(l => (!f.emp || l.employee_id===f.emp) && bookingInPeriod(l, f.month, f.year))
+    .sort((a,b) => { const k = keyOf[f.sort] || keyOf.from, x = k(a), y = k(b); return (x<y?-1:x>y?1:a.start_date.localeCompare(b.start_date)) * (f.dir==='asc'?1:-1); });
+  const days = list.filter(l=>l.status==='approved').reduce((a,l)=>a+(Number(l.days)||0),0);
+  document.getElementById('hol-recs-count').textContent = `${list.length} booking${list.length!==1?'s':''} · ${days} day${days!==1?'s':''} booked`;
+  const th = (k, label) => `<th class="th-sort">${label} <span class="sort-btns"><button title="Sort ascending" class="${f.sort===k&&f.dir==='asc'?'on':''}" onclick="setHolSort('${k}','asc')">▲</button><button title="Sort descending" class="${f.sort===k&&f.dir==='desc'?'on':''}" onclick="setHolSort('${k}','desc')">▼</button></span></th>`;
+  box.innerHTML = list.length ? `<div class="table-wrap"><table><thead><tr>${th('emp','Employee')}${th('from','From')}${th('to','To')}<th>Days</th>${th('status','Status')}<th>Reason</th></tr></thead><tbody>${
+    list.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td><td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusCell(l)}</td><td class="small">${esc(l.reason)||'—'}</td></tr>`).join('')
+  }</tbody></table></div>` : '<div class="empty small">No holiday bookings match these filters.</div>';
+}
+function setHolFilter(prop, v){ window._hf[prop] = v; navigate(state.page); }
+function setHolSort(k, dir){ window._hf.sort = k; window._hf.dir = dir; drawHolidayRecords(); }
 // Refresh the in-detail tab if open, otherwise re-render the current page.
 function refreshLeaveViews(){
   if (window._detailEmp && refreshEmpTab()) return;
@@ -4679,7 +4765,7 @@ function exportAssets(){
 const AUDIT_LABELS = {
   login:'Signed in', logout:'Signed out', login_failed:'Failed sign-in', login_blocked:'Sign-in blocked (leaver access ended)', password_change:'Changed own password', password_reset:'Reset a password',
   user_create:'Created login account', user_update:'Updated login account', user_delete:'Deleted login account',
-  employee_create:'Added employee', employee_update:'Updated employee', my_details_update:'Updated own contact details',
+  employee_create:'Added employee', employee_update:'Updated employee', my_details_update:'Updated own contact details', my_photo_update:'Updated own photo',
   contact_save:'Saved emergency contact', contact_delete:'Deleted emergency contact',
   leave_create:'Recorded / requested leave', leave_approved:'Approved leave', leave_rejected:'Rejected leave', leave_delete:'Deleted leave', leave_request_cancelled:'Cancelled own leave request', leave_recounted:'Re-counted bookings',
   holiday_adjustment:'Holiday adjustment', holiday_cancel_requested:'Requested holiday cancellation', holiday_cancel_withdrawn:'Withdrew cancellation request', holiday_cancel_approved:'Approved holiday cancellation', holiday_cancel_declined:'Declined holiday cancellation',
@@ -5132,7 +5218,7 @@ async function renderMyProfile(c){
     ${leaverNote}
     ${ackCard}
     ${annHtml}
-    <div class="card"><div class="detail-head">${avatarHtml(e,true)}<div class="who"><h2>${e.title?esc(e.title)+' ':''}${esc(e.first_name)} ${esc(e.last_name)}${e.is_director?' <span class="badge b-yellow">Director</span>':''}</h2><div class="muted">${esc(e.job_title)} · ${esc(e.department)} · ${esc(e.site)}</div><div class="small muted">${esc(e.employee_number)} · Started ${fmtDate(e.start_date)} (${serviceYM(e.start_date)})${e.manager_id?` · Manager: ${esc(empName(e.manager_id))}`:''}</div></div></div></div>
+    <div class="card"><div class="detail-head"><div class="photo-wrap">${avatarHtml(e,true)}${state.leaver?'':`<button class="btn btn-outline btn-sm" onclick="myPhotoForm()">${e.photo?'Change photo':'Add photo'}</button>`}</div><div class="who"><h2>${e.title?esc(e.title)+' ':''}${esc(e.first_name)} ${esc(e.last_name)}${e.is_director?' <span class="badge b-yellow">Director</span>':''}</h2><div class="muted">${esc(e.job_title)} · ${esc(e.department)} · ${esc(e.site)}</div><div class="small muted">${esc(e.employee_number)} · Started ${fmtDate(e.start_date)} (${serviceYM(e.start_date)})${e.manager_id?` · Manager: ${esc(empName(e.manager_id))}`:''}</div></div></div></div>
     <div class="card"><div class="card-head"><h3>My details</h3><button class="btn btn-outline btn-sm" onclick="myDetailsForm()">Update contact details</button></div>
       <dl class="kv">
         <dt>Date of birth</dt><dd>${fmtDate(e.date_of_birth)}</dd>
