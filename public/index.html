@@ -3481,9 +3481,9 @@ async function renderCompanyDays(c){
       <div class="stat warn"><div class="num">${sd.filter(d=>d.deducts).length}</div><div class="lbl">Shutdown days using holiday</div></div>
     </div>
     <div class="card"><div class="card-head"><h3>Closed days ${yr}</h3></div>
-      <p class="small muted" style="margin-bottom:12px">These apply to everyone. Bank holidays and free shutdown days are on top of holiday allowance. Shutdown days marked <em>uses holiday</em> are taken from everyone's allowance automatically. None of these days are counted when someone books holiday across them.</p>
+      <p class="small muted" style="margin-bottom:12px">These apply to everyone. Bank holidays and free shutdown days are on top of holiday allowance. Shutdown days marked <em>uses holiday</em> are taken from everyone's allowance automatically. None of these days are counted when someone books holiday across them. Days before today are 🔒 locked so past holiday balances can't change.</p>
       ${list.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Day</th><th>Name</th><th>Type</th><th></th></tr></thead><tbody>${
-        list.map(d=>`<tr><td>${fmtDate(d.date)}</td><td>${dayName(d.date)}</td><td>${esc(d.name)}</td><td>${companyDayBadge(d)}</td><td style="text-align:right;white-space:nowrap">${d.kind==='shutdown'?`<button class="btn btn-outline btn-sm" onclick="toggleShutdownDeduct('${d.id}')">${d.deducts?'Make free day':'Make it use holiday'}</button> `:''}<button class="btn btn-danger btn-sm" onclick="deleteCompanyDay('${d.id}')">×</button></td></tr>`).join('')
+        list.map(d=>`<tr><td>${fmtDate(d.date)}</td><td>${dayName(d.date)}</td><td>${esc(d.name)}</td><td>${companyDayBadge(d)}</td><td style="text-align:right;white-space:nowrap">${isLockedDay(d) ? '<span class="badge b-grey" title="Past dates are locked so past holiday balances stay as they were">🔒 Locked</span>' : `${d.kind==='shutdown'?`<button class="btn btn-outline btn-sm" onclick="toggleShutdownDeduct('${d.id}')">${d.deducts?'Make free day':'Make it use holiday'}</button> `:''}<button class="btn btn-danger btn-sm" onclick="deleteCompanyDay('${d.id}')">×</button>`}</td></tr>`).join('')
       }</tbody></table></div>`:`<div class="empty small">No bank holidays or shutdown days for ${yr} yet. Use <strong>Import from GOV.UK</strong> to add the bank holidays.</div>`}
     </div>`;
 }
@@ -3505,6 +3505,10 @@ async function recountLeaveForClosedDays(oldClosed){
   return n;
 }
 async function saveCompanyDays(rows, msg){
+  // Adding a day in the past is allowed (e.g. setting up this year's earlier bank holidays) but
+  // it re-counts bookings already taken, so check first. Once saved, past days are locked.
+  const past = rows.filter(r => r.date < today());
+  if (past.length && !confirm(`${past.length===1?`${fmtDate(past[0].date)} is`:`${past.length} of these dates are`} in the past. Adding ${past.length===1?'it':'them'} will re-count any holiday already booked over ${past.length===1?'that date':'those dates'}, and past days can't be changed or removed afterwards.\n\nAdd anyway?`)) return;
   const old = new Set(state.closedDays);
   for (const r of rows) await idbPut('company_days', { id:uuid(), created_at:nowISO(), ...r });
   await refreshCaches();
@@ -3558,14 +3562,18 @@ async function saveShutdown(ev){
   if (!rows.length){ toast('No working days to add','error'); return; }
   await saveCompanyDays(rows, `${rows.length} shutdown day${rows.length!==1?'s':''} added`);
 }
+// Closed days before today are locked: changing them would rewrite past holiday balances
+const isLockedDay = d => d.date < today();
 async function toggleShutdownDeduct(id){
   const d = await idbGet('company_days', id); if (!d || d.kind!=='shutdown') return;
+  if (isLockedDay(d)){ toast('Past shutdown days are locked','error'); return; }
   d.deducts = !d.deducts; await idbPut('company_days', d);
   await logAction('company_day_update', { detail:`${d.date} ${d.name}: ${d.deducts?'uses holiday':'free day'}` });
   await refreshCaches(); toast(d.deducts ? 'Now uses holiday' : 'Now a free day'); navigate('company-days');
 }
 async function deleteCompanyDay(id){
   const d = await idbGet('company_days', id); if (!d) return;
+  if (isLockedDay(d)){ toast('Past bank holidays and shutdown days are locked','error'); return; }
   if (!confirm(`Remove ${d.name} on ${fmtDate(d.date)}? It becomes a normal working day.`)) return;
   const old = new Set(state.closedDays);
   await idbDelete('company_days', id); await refreshCaches();
