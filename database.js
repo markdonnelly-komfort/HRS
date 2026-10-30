@@ -102,6 +102,7 @@ function initializeSchema() {
       full_name TEXT NOT NULL,
       must_change_password INTEGER DEFAULT 0,
       ann_seen_at TEXT,
+      password_changed_at TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     )
   `);
@@ -402,7 +403,9 @@ function initializeSchema() {
       user TEXT,
       action TEXT NOT NULL,
       employee_id TEXT,
-      details TEXT
+      details TEXT,
+      self_service INTEGER DEFAULT 0,      -- change staff made to their own record (flagged to HR)
+      hr_reviewed_at TEXT
     )
   `);
   db.run(`
