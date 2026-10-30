@@ -753,7 +753,7 @@ function leaverAccessText(e){
 
 function logout(){
   if (state.user) logAction('logout');
-  state.user = null; state.leaver = null; window._holYear = null; window._absPeriod = null; window._hf = null;
+  state.user = null; state.leaver = null; window._holYear = null; window._absPeriod = null; window._hf = null; window._tableSorts = null; window._absEmp = null;
   sessionStorage.removeItem('hr_session');
   document.getElementById('app').classList.remove('active');
   document.getElementById('login-view').style.display = 'flex';
@@ -1382,7 +1382,7 @@ async function renderEmployees(c, teamOnly){
       <select id="emp-dept" onchange="filterEmployees()"><option value="">All departments</option>${DEPARTMENTS.map(s=>`<option>${s}</option>`).join('')}</select>
       <select id="emp-status" onchange="filterEmployees()"><option value="active">Active</option><option value="">All statuses</option><option value="leaver">Leavers</option><option value="on_leave">On leave</option></select>
     </div>
-    <div class="card"><div class="table-wrap"><table>
+    <div class="card"><div class="table-wrap"><table class="sortable" data-key="employees">
       <thead><tr><th></th><th>Name</th><th>No.</th><th>Job title</th><th>Department</th><th>Site</th><th>Manager</th><th>Status</th></tr></thead>
       <tbody id="emp-tbody"></tbody>
     </table></div></div>`;
@@ -1404,7 +1404,7 @@ function filterEmployees(){
   tb.innerHTML = rows.length ? rows.map(e=>`
     <tr class="clickable" onclick="employeeDetail('${e.id}')">
       <td>${avatarHtml(e)}</td>
-      <td><strong>${esc(e.first_name)} ${esc(e.last_name)}</strong></td>
+      <td data-v="${esc((e.last_name||'')+' '+(e.first_name||''))}"><strong>${esc(e.first_name)} ${esc(e.last_name)}</strong></td>
       <td>${esc(e.employee_number)}</td>
       <td>${esc(e.job_title)}</td>
       <td>${esc(e.department)}</td>
@@ -1964,7 +1964,10 @@ async function renderLeave(c, category){
   const cancelReqs = leave.filter(l=>isCancelRequest(l) && canDecideCancel(l)).sort((a,b)=>a.start_date.localeCompare(b.start_date));
   // Sickness and other absence records can be shown for this year, last year or all; anything awaiting action is always shown
   const per = category==='holiday' ? null : await absencePeriod();
-  const records = leave.filter(l=>l.status!=='pending' && (!per || per.inPeriod(l))).sort((a,b)=>b.start_date.localeCompare(a.start_date));
+  // Sickness / other absence can also be narrowed to one employee
+  const absEmps = per ? [...new Set(leave.map(l=>l.employee_id))].map(id=>[id, empName(id)]).sort((a,b)=>a[1].localeCompare(b[1])) : [];
+  if (per && window._absEmp && !absEmps.some(([id])=>id===window._absEmp)) window._absEmp = null;
+  const records = leave.filter(l=>l.status!=='pending' && (!per || per.inPeriod(l)) && (!per || !window._absEmp || l.employee_id===window._absEmp)).sort((a,b)=>b.start_date.localeCompare(a.start_date));
   const meta = {
     holiday:  { recTitle:'Holiday bookings',       recBtn:'+ Record holiday',  preset:'holiday' },
     sickness: { recTitle:'Sickness records',       recBtn:'+ Record sickness', preset:'sickness' },
@@ -2006,8 +2009,8 @@ async function renderLeave(c, category){
     ${sickExtra}
     ${per ? per.html : ''}
     ${category==='holiday' ? holidayRecordsCardHtml(records) : `<div class="card">
-      <div class="card-head"><h3>${meta.recTitle}${per?` <span class="small muted">· ${esc(per.label)}</span>`:''}</h3></div>
-      ${records.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th>${typeCol}<th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${rtwCol}</tr></thead><tbody>${
+      <div class="card-head"><h3>${meta.recTitle}${per?` <span class="small muted">· ${esc(per.label)} · ${records.length} record${records.length!==1?'s':''}</span>`:''}</h3>${per?`<select onchange="window._absEmp=this.value||null;navigate(state.page)" style="padding:7px 10px;border:2px solid var(--border);border-radius:8px"><option value="">All employees</option>${absEmps.map(([id,n])=>`<option value="${id}" ${window._absEmp===id?'selected':''}>${esc(n)}</option>`).join('')}</select>`:''}</div>
+      ${records.length?`<div class="table-wrap"><table class="sortable" data-key="absence-${category}"><thead><tr><th>Employee</th>${typeCol}<th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>${rtwCol}</tr></thead><tbody>${
         records.map(l=>`<tr><td>${esc(empName(l.employee_id))}</td>${typeCell(l)}<td>${fmtDate(l.start_date)}</td><td>${fmtDate(l.end_date)}</td><td>${l.days}</td><td>${leaveStatusCell(l)}</td><td class="small">${sickTag(l)}${esc(l.reason)||'—'}</td>${rtwTd(l)}</tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">No records.</div>'}
     </div>`}`;
@@ -2056,6 +2059,51 @@ function drawHolidayRecords(){
 }
 function setHolFilter(prop, v){ window._hf[prop] = v; navigate(state.page); }
 function setHolSort(k, dir){ window._hf.sort = k; window._hf.dir = dir; drawHolidayRecords(); }
+
+// ── Sortable tables ──
+// Any <table class="sortable" data-key="…"> gets ▲▼ buttons on headings that have text
+// (add data-nosort to a <th> to skip it). Each column is sorted as dates, numbers or text
+// depending on what it holds; a cell's data-v overrides its text (e.g. surname for a name).
+// Blank cells ("—") always go last. The chosen sort is remembered per table while signed in.
+const UK_MONTHS = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12 };
+const cellText = td => (td ? (td.dataset.v ?? td.textContent) : '').replace(/\s+/g,' ').trim();
+const isBlankCell = s => !s || s==='—' || s==='-';
+function ukDateKey(s){ const m = s.match(/^(\d{1,2}) ([A-Za-z]{3,4})[a-z]* (\d{4})/); const mo = m && UK_MONTHS[m[2].slice(0,3).toLowerCase()]; return mo ? `${m[3]}-${String(mo).padStart(2,'0')}-${m[1].padStart(2,'0')}` : null; }
+const numKey = s => { const t = s.replace(/[£,%]/g,''); return /^-?\d+(\.\d+)?$/.test(t) ? Number(t) : null; };
+function sortTable(table, idx, dir){
+  const tbody = table.tBodies[0]; if (!tbody) return;
+  const width = table.tHead?.rows[0]?.cells.length || 0;
+  const rows = [...tbody.rows].filter(r => r.cells.length===width);
+  if (rows.length < 2) return;
+  const vals = rows.map(r => cellText(r.cells[idx])), filled = vals.filter(v=>!isBlankCell(v));
+  const kind = filled.length && filled.every(v=>ukDateKey(v)) ? 'date' : filled.length && filled.every(v=>numKey(v)!==null) ? 'num' : 'text';
+  const key = v => kind==='date' ? ukDateKey(v) : kind==='num' ? numKey(v) : v.toLowerCase();
+  const sorted = rows.map((r,i)=>({ r, v: vals[i], i })).sort((a,b) => {
+    const ab = isBlankCell(a.v), bb = isBlankCell(b.v);
+    if (ab || bb) return ab===bb ? a.i-b.i : ab ? 1 : -1;
+    const x = key(a.v), y = key(b.v);
+    return ((kind==='num' ? x-y : String(x).localeCompare(String(y))) || a.i-b.i) * (dir==='asc'?1:-1);
+  });
+  sorted.forEach(({r}) => { r.dataset.s = '1'; tbody.appendChild(r); });
+  table.querySelectorAll('.sort-btns button').forEach(b => b.classList.toggle('on', +b.dataset.col===idx && b.dataset.dir===dir));
+  (window._tableSorts = window._tableSorts || {})[table.dataset.key || table.id] = { idx, dir };
+}
+function makeSortable(){
+  document.querySelectorAll('table.sortable').forEach(table => {
+    const head = table.tHead?.rows[0]; if (!head) return;
+    [...head.cells].forEach((th, idx) => {
+      if (th.dataset.ready || th.hasAttribute('data-nosort') || !th.textContent.trim()) return;
+      th.dataset.ready = '1'; th.classList.add('th-sort');
+      th.insertAdjacentHTML('beforeend', ` <span class="sort-btns"><button type="button" data-col="${idx}" data-dir="asc" title="Sort ascending">▲</button><button type="button" data-col="${idx}" data-dir="desc" title="Sort descending">▼</button></span>`);
+    });
+    if (!table.dataset.wired){ table.dataset.wired = '1'; table.addEventListener('click', ev => { const b = ev.target.closest('.sort-btns button'); if (b && table.contains(b)) sortTable(table, +b.dataset.col, b.dataset.dir); }); }
+    // Re-apply the remembered sort when the rows have been redrawn
+    const saved = window._tableSorts?.[table.dataset.key || table.id];
+    if (saved && [...(table.tBodies[0]?.rows||[])].some(r => !r.dataset.s)) sortTable(table, saved.idx, saved.dir);
+  });
+}
+// Pages redraw their lists in many places, so watch for new tables rather than calling this everywhere
+(() => { let queued = false; new MutationObserver(() => { if (queued) return; queued = true; setTimeout(() => { queued = false; makeSortable(); }, 0); }).observe(document.body, { childList:true, subtree:true }); })();
 // Refresh the in-detail tab if open, otherwise re-render the current page.
 function refreshLeaveViews(){
   if (window._detailEmp && refreshEmpTab()) return;
@@ -2280,12 +2328,12 @@ async function renderPerformance(c){
       ${oo.done.length?`<h4 style="margin:16px 0 8px">Recently completed</h4>${oneToOneTable(oo.done.slice(0,10), true)}`:''}
     </div>
     <div class="card"><div class="card-head"><h3>Reviews & appraisals</h3></div>
-      ${reviews.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Type</th><th>Period</th><th>Scheduled</th><th>Status</th><th></th></tr></thead><tbody>${
+      ${reviews.length?`<div class="table-wrap"><table class="sortable" data-key="perf-reviews"><thead><tr><th>Employee</th><th>Type</th><th>Period</th><th>Scheduled</th><th>Status</th><th></th></tr></thead><tbody>${
         reviews.sort((a,b)=>(b.scheduled_date||'').localeCompare(a.scheduled_date||'')).map(r=>`<tr><td>${esc(empName(r.employee_id))}</td><td>${r.type==='annual'?'Annual appraisal':'Mid-year review'}</td><td>${esc(r.period)}</td><td>${fmtDate(r.scheduled_date)}</td><td>${reviewStatusBadge(r.status)}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="reviewForm('${r.employee_id}','${r.id}')">Open</button></td></tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">No reviews scheduled. Open an employee record to schedule one.</div>'}
     </div>
     <div class="card"><div class="card-head"><h3>Objectives across ${isMgr?'your team':'the company'}</h3></div>
-      ${objectives.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Objective</th><th>Target</th><th>Progress</th><th>Status</th><th></th></tr></thead><tbody>${
+      ${objectives.length?`<div class="table-wrap"><table class="sortable" data-key="perf-objectives"><thead><tr><th>Employee</th><th>Objective</th><th>Target</th><th>Progress</th><th>Status</th><th></th></tr></thead><tbody>${
         objectives.sort((a,b)=>(a.target_date||'').localeCompare(b.target_date||'')).map(o=>`<tr><td>${esc(empName(o.employee_id))}</td><td>${esc(o.title)}</td><td>${fmtDate(o.target_date)}</td><td><div class="progress"><div style="width:${o.progress}%"></div></div></td><td>${objStatusBadge(o.status)}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="objectiveForm('${o.employee_id}','${o.id}')">Edit</button></td></tr>`).join('')
       }</tbody></table></div>`:'<div class="empty small">No objectives set.</div>'}
     </div>`;
@@ -2543,7 +2591,7 @@ function canViewTrainingFor(empId){
 const sortTraining = (a,b) => (b.completed_date||'').localeCompare(a.completed_date||'');
 function trainingTable(list, showEmp, emptyMsg){
   if (!list.length) return `<div class="empty small">${emptyMsg}</div>`;
-  return `<div class="table-wrap"><table><thead><tr>${showEmp?'<th>Employee</th>':''}<th>Course / qualification</th><th>Category</th><th>Provider</th><th>Completed</th><th>Expires</th><th>Status</th><th></th></tr></thead><tbody>${
+  return `<div class="table-wrap"><table class="sortable" data-key="training-${showEmp?'all':'one'}"><thead><tr>${showEmp?'<th>Employee</th>':''}<th>Course / qualification</th><th>Category</th><th>Provider</th><th>Completed</th><th>Expires</th><th>Status</th><th></th></tr></thead><tbody>${
     list.map(r=>`<tr>${showEmp?`<td>${esc(empName(r.employee_id))}</td>`:''}<td><strong>${esc(r.title)}</strong>${r.notes?`<div class="small muted">${esc(r.notes)}</div>`:''}</td><td class="small">${esc(r.category)||'—'}</td><td class="small">${esc(r.provider)||'—'}</td><td>${fmtDate(r.completed_date)}</td><td>${r.expiry_date?fmtDate(r.expiry_date):'—'}</td><td>${trainingStatusBadge(r)}</td><td style="text-align:right;white-space:nowrap">${r.file?`<button class="btn btn-outline btn-sm" onclick="openTrainingCert('${r.id}')" title="${esc(r.file.filename)}">Certificate</button> `:''}${canEditTraining(r)?`<button class="btn btn-outline btn-sm" onclick="trainingForm({id:'${r.id}'})">Edit</button>${canDeleteTraining(r)?` <button class="btn btn-danger btn-sm" onclick="deleteTraining('${r.id}')">×</button>`:''}`:''}</td></tr>`).join('')
   }</tbody></table></div>`;
 }
@@ -2817,7 +2865,7 @@ function filterPayDocs(){
   const q=(val('pu-search')||'').toLowerCase(), t=val('pu-type');
   const list=(window._payDocsAll||[]).filter(d => (!t || d.doc_type===t) && (!q || `${empName(d.employee_id)} ${d.filename} ${payDocPeriodLabel(d)}`.toLowerCase().includes(q)))
     .sort((a,b)=>(b.uploaded_at||'').localeCompare(a.uploaded_at||''));
-  document.getElementById('pu-list').innerHTML = list.length ? `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Type</th><th>Period</th><th>File</th><th>Uploaded</th><th>Opened</th><th></th></tr></thead><tbody>${
+  document.getElementById('pu-list').innerHTML = list.length ? `<div class="table-wrap"><table class="sortable" data-key="pay-uploads"><thead><tr><th>Employee</th><th>Type</th><th>Period</th><th>File</th><th>Uploaded</th><th>Opened</th><th></th></tr></thead><tbody>${
     list.map(d=>`<tr><td>${esc(empName(d.employee_id))}</td><td><span class="badge b-grey">${PAY_DOC_TYPES[d.doc_type]||esc(d.doc_type)}</span></td><td>${esc(payDocPeriodLabel(d))}</td><td class="small" style="overflow-wrap:anywhere">${esc(d.filename)}</td><td class="small">${fmtDate(d.uploaded_at)}</td><td class="small">${d.viewed_at?fmtDate(d.viewed_at):'—'}</td><td style="text-align:right;white-space:nowrap"><button class="btn btn-outline btn-sm" onclick="openPayDoc('${d.id}',false)">View</button> <button class="btn btn-danger btn-sm" onclick="deletePayDoc('${d.id}')">×</button></td></tr>`).join('')
   }</tbody></table></div>` : '<div class="empty small">No documents uploaded yet.</div>';
 }
@@ -3705,7 +3753,7 @@ function bradfordTableHtml(people, leave){
   window._bradfordRows = rows.map(r=>[r.e.first_name+' '+r.e.last_name, r.e.employee_number||'', r.e.department||'', r.e.site||'', r.S, r.D, r.score]);
   return `<div class="card"><div class="card-head"><h3>Bradford Factor — last 52 weeks</h3>${rows.length?`<button class="btn btn-outline btn-sm" onclick="downloadCSV('bradford-factor.csv',[['Employee','Number','Department','Site','Spells','Days','Bradford Factor'],...window._bradfordRows])">Export CSV</button>`:''}</div>
     <p class="small muted" style="margin-bottom:10px">Spells² × days. Shown for information only — no warning levels are applied.</p>
-    ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Department</th><th>Spells</th><th>Days</th><th>Bradford Factor</th></tr></thead><tbody>${
+    ${rows.length?`<div class="table-wrap"><table class="sortable" data-key="bradford"><thead><tr><th>Employee</th><th>Department</th><th>Spells</th><th>Days</th><th>Bradford Factor</th></tr></thead><tbody>${
       rows.map(r=>`<tr class="clickable" onclick="employeeDetail('${r.e.id}')"><td>${esc(r.e.first_name+' '+r.e.last_name)}</td><td>${esc(r.e.department)||'—'}</td><td>${r.S}</td><td>${r.D}</td><td><strong>${r.score}</strong></td></tr>`).join('')
     }</tbody></table></div>`:'<div class="empty small">No sickness in the last 52 weeks.</div>'}
   </div>`;
@@ -3932,7 +3980,7 @@ function filterSigs(status, el){
 function sigTable(list, showEmp, empty){
   if (!list.length) return `<div class="empty small">${empty}</div>`;
   const isHR = state.user.role==='hr_admin';
-  return `<div class="table-wrap"><table><thead><tr>${showEmp?'<th>Employee</th>':''}<th>Document</th><th>Sent</th><th>Status</th><th></th></tr></thead><tbody>${
+  return `<div class="table-wrap"><table class="sortable" data-key="esign-${showEmp?'all':'one'}"><thead><tr>${showEmp?'<th>Employee</th>':''}<th>Document</th><th>Sent</th><th>Status</th><th></th></tr></thead><tbody>${
     list.map(r=>{ const sum = signersSummary(r); return `<tr>${showEmp?`<td>${esc(empName(r.employee_id))}</td>`:''}<td><strong>${esc(r.title)}</strong>${sum?`<div class="small muted">${sum}</div>`:''}${r.status==='declined'&&r.declined_reason?`<div class="small muted">Reason: ${esc(r.declined_reason)}</div>`:''}</td><td class="small">${fmtDate(r.sent_at)}</td><td>${sigStatusBadge(r)}</td><td style="text-align:right;white-space:nowrap">${
       (isMyTurn(r) ? `<button class="btn btn-accent btn-sm" onclick="signForm('${r.id}')">Review &amp; sign</button> ` : '')
       + (r.signed_file ? `<button class="btn btn-outline btn-sm" onclick="openSignFile('${r.id}','signed')">${r.status==='signed'?'Signed copy':'Copy so far'}</button> ` : '')
@@ -4626,7 +4674,7 @@ function filterAssets(){
 function assetTable(list, empty, showHolder = true, canAct){   // canAct: may issue/return (defaults to HR)
   if (!list.length) return `<div class="empty small">${empty||'None.'}</div>`;
   const hr = state.user.role==='hr_admin', act = canAct ?? hr;
-  return `<div class="table-wrap"><table><thead><tr><th>Asset</th><th>Category</th><th>Status</th>${showHolder?'<th>Held by</th>':''}<th>Since</th>${act?'<th></th>':''}</tr></thead><tbody>${
+  return `<div class="table-wrap"><table class="sortable" data-key="assets-${showHolder?'all':'one'}"><thead><tr><th>Asset</th><th>Category</th><th>Status</th>${showHolder?'<th>Held by</th>':''}<th>Since</th>${act?'<th></th>':''}</tr></thead><tbody>${
     list.map(a=>`<tr><td><strong>${esc(a.name)}</strong>${assetIdText(a)?`<div class="small muted">${esc(assetIdText(a))}</div>`:''}</td><td class="small">${esc(a.category)||'—'}</td><td>${assetStatusBadge(a.status)}${a.status==='issued'&&empById(a.employee_id)?.status==='leaver'?' <span class="badge b-red">Leaver</span>':''}</td>${showHolder?`<td>${a.employee_id?esc(empName(a.employee_id)):'—'}</td>`:''}<td class="small">${a.status==='issued'?fmtDate(a.issued_date):'—'}</td>${act?`<td style="text-align:right;white-space:nowrap">${
       a.status==='issued' ? `<button class="btn btn-outline btn-sm" onclick="returnAssetForm('${a.id}')">Return</button> ` : a.status==='available' ? `<button class="btn btn-accent btn-sm" onclick="issueAssetForm('${a.id}')">Issue</button> ` : ''
     }${hr?`<button class="btn btn-outline btn-sm" onclick="assetForm('${a.id}')">Open</button>`:''}</td>`:''}</tr>`).join('')
@@ -4902,13 +4950,13 @@ async function renderReports(c){
     </div>
 
     <div class="card"><div class="card-head"><h3>Annual leave balances</h3><button class="btn btn-outline btn-sm" onclick="exportLeaveBalances()">Export CSV</button></div>
-      <div class="table-wrap"><table id="rep-leave"><thead><tr><th>Employee</th><th>Site</th><th>Allowance</th><th>Adj</th><th>Entitlement</th><th>Taken</th><th>Booked (upcoming)</th><th>Pending</th><th>Remaining</th></tr></thead><tbody><tr><td colspan="9" class="muted">Loading…</td></tr></tbody></table></div>
+      <div class="table-wrap"><table id="rep-leave" class="sortable" data-key="rep-leave"><thead><tr><th>Employee</th><th>Site</th><th>Allowance</th><th>Adj</th><th>Entitlement</th><th>Taken</th><th>Booked (upcoming)</th><th>Pending</th><th>Remaining</th></tr></thead><tbody><tr><td colspan="9" class="muted">Loading…</td></tr></tbody></table></div>
     </div>
 
     <div class="card" id="missing-data-card"></div>
 
     <div class="card"><div class="card-head"><h3>Current employees</h3><button class="btn btn-outline btn-sm" onclick="exportHeadcount()">Export CSV</button></div>
-      <div class="table-wrap"><table><thead><tr><th>No.</th><th>Name</th><th>Job title</th><th>Dept</th><th>Site</th><th>Start date</th><th>Service</th></tr></thead><tbody>${
+      <div class="table-wrap"><table class="sortable" data-key="rep-current"><thead><tr><th>No.</th><th>Name</th><th>Job title</th><th>Dept</th><th>Site</th><th>Start date</th><th>Service</th></tr></thead><tbody>${
         active.sort((a,b)=>a.last_name.localeCompare(b.last_name)).map(e=>`<tr><td>${esc(e.employee_number)}</td><td>${esc(e.first_name+' '+e.last_name)}</td><td>${esc(e.job_title)}</td><td>${esc(e.department)}</td><td>${esc(e.site)}</td><td>${fmtDate(e.start_date)}</td><td>${serviceYears(e.start_date)}</td></tr>`).join('')
       }</tbody></table></div>
     </div>`;
@@ -4952,7 +5000,7 @@ async function renderMissingData(){
   card.innerHTML = `<div class="card-head"><h3>Missing data (${rows.length} ${rows.length===1?'person':'people'})</h3><div class="doc-btns">
       <select onchange="window._missingPick=this.value;renderMissingData()" style="padding:6px 10px;border:2px solid var(--border);border-radius:8px"><option value="">Anything missing</option>${MISSING_CHECKS.map(([l])=>`<option ${pick===l?'selected':''}>${l}</option>`).join('')}</select>
       ${rows.length?`<button class="btn btn-outline btn-sm" onclick="exportMissingData()">Export CSV</button>`:''}</div></div>
-    ${shown.length ? `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Department</th><th>Missing</th><th></th></tr></thead><tbody>${
+    ${shown.length ? `<div class="table-wrap"><table class="sortable" data-key="missing"><thead><tr><th>Employee</th><th>Department</th><th>Missing</th><th></th></tr></thead><tbody>${
       shown.map(({e,gaps})=>`<tr><td>${esc(e.first_name+' '+e.last_name)}</td><td class="small">${esc(e.department)||'—'}</td><td>${gaps.map(g=>`<span class="badge ${g===pick?'b-red':'b-amber'}">${esc(g)}</span>`).join(' ')}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="employeeDetail('${e.id}')">Open</button></td></tr>`).join('')
     }</tbody></table></div>` : `<div class="empty small">${rows.length?'Nobody is missing that.':'Every current employee record is complete.'}</div>`}`;
 }
