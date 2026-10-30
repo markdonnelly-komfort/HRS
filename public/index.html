@@ -798,6 +798,13 @@ function topSearchKey(ev){
   if (ev.key==='Enter'){ const first = document.querySelector('#topbar-results .ts-item'); if (first) first.dispatchEvent(new MouseEvent('mousedown')); }
 }
 
+// Roles: HR Admin is the only role set on the login account. Anyone else gets manager
+// access automatically while at least one current employee reports to them.
+const directReportsOf = empId => empId ? state.employees.filter(e => e.manager_id===empId && e.status!=='leaver') : [];
+function effectiveRole(u){
+  if (u.role==='hr_admin') return 'hr_admin';
+  return directReportsOf(u.employee_id).length ? 'manager' : 'employee';
+}
 function roleLabel(r){ return ({hr_admin:'HR Admin', manager:'Manager', employee:'Employee'})[r] || r; }
 
 // ── Leavers ──
@@ -843,6 +850,9 @@ function logout(){
 async function refreshCaches(){
   state.employees = await idbGetAll('employees');
   const users = await idbGetAll('users');
+  // Only HR Admin is set on the account; everyone else is a manager if anyone current reports to them
+  users.forEach(u => u.role = effectiveRole(u));
+  if (state.user) state.user.role = effectiveRole(state.user);
   state.usersById = {}; users.forEach(u => state.usersById[u.id] = u);
   state.companyDays = (await idbGetAll('company_days')).sort((a,b)=>a.date.localeCompare(b.date));
   state.closedDays = new Set(state.companyDays.map(c=>c.date));
@@ -5222,13 +5232,13 @@ async function deleteTask(id){ if(!confirm('Delete this task?'))return; const t=
 // USER ACCOUNTS (HR admin)
 // ═══════════════════════════════════════════════
 async function renderUsers(c){
-  const users = await idbGetAll('users');
+  const users = (await idbGetAll('users')).map(u => ({ ...u, role: effectiveRole(u) }));
   setTopbar(`<button class="btn btn-accent" onclick="userForm()">+ New account</button>`);
   c.innerHTML = `<div class="card"><div class="card-head"><h3>Login accounts</h3></div>
-    <div class="table-wrap"><table><thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Linked employee</th><th></th></tr></thead><tbody>${
-      users.sort((a,b)=>a.username.localeCompare(b.username)).map(u=>`<tr><td><strong>${esc(u.username)}</strong></td><td>${esc(u.full_name)}</td><td><span class="badge b-blue">${roleLabel(u.role)}</span>${(()=>{ const e = empById(u.employee_id), ends = leaverAccessEnds(e); return ends ? ` <span class="badge ${today()>ends?'b-grey':'b-amber'}">${today()>ends?'Leaver · sign-in ended':'Leaver · until '+fmtDate(ends)}</span>` : ''; })()}${u.must_change_password?' <span class="badge b-amber" title="Has not chosen their own password yet">Temporary password</span>':''}</td><td>${u.employee_id?esc(empName(u.employee_id)):'—'}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="userForm('${u.id}')">Edit</button> <button class="btn btn-outline btn-sm" onclick="resetPwd('${u.id}')">Reset password</button>${u.username!=='admin'?` <button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}')">×</button>`:''}</td></tr>`).join('')
+    <div class="table-wrap"><table><thead><tr><th>Username</th><th>Name</th><th>Access</th><th>Linked employee</th><th></th></tr></thead><tbody>${
+      users.sort((a,b)=>a.username.localeCompare(b.username)).map(u=>`<tr><td><strong>${esc(u.username)}</strong></td><td>${esc(u.full_name)}</td><td><span class="badge b-blue">${roleLabel(u.role)}</span>${u.role==='manager'?(n => ` <span class="small muted">${n} report${n!==1?'s':''}</span>`)(directReportsOf(u.employee_id).length):''}${(()=>{ const e = empById(u.employee_id), ends = leaverAccessEnds(e); return ends ? ` <span class="badge ${today()>ends?'b-grey':'b-amber'}">${today()>ends?'Leaver · sign-in ended':'Leaver · until '+fmtDate(ends)}</span>` : ''; })()}${u.must_change_password?' <span class="badge b-amber" title="Has not chosen their own password yet">Temporary password</span>':''}</td><td>${u.employee_id?esc(empName(u.employee_id)):'—'}</td><td style="text-align:right"><button class="btn btn-outline btn-sm" onclick="userForm('${u.id}')">Edit</button> <button class="btn btn-outline btn-sm" onclick="resetPwd('${u.id}')">Reset password</button>${u.username!=='admin'?` <button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}')">×</button>`:''}</td></tr>`).join('')
     }</tbody></table></div></div>
-    <div class="card"><p class="small muted">Tip: when you add an employee, create them a matching <strong>Employee</strong> account here and link it to their record so they can use the self-service portal.</p></div>`;
+    <div class="card"><p class="small muted">Tip: when you add an employee, create them a <strong>Standard</strong> account here and link it to their record so they can use the self-service portal. Manager access is automatic: anyone with people reporting to them (set by <em>Reports to</em> on the employee record) sees the manager menus.</p></div>`;
 }
 // ── Passwords ──
 // New accounts and resets get a random temporary password (HR can type their own instead).
@@ -5262,7 +5272,7 @@ async function userForm(id){
         <div class="form-group"><label class="req">Full name</label><input id="us-name" value="${esc(u.full_name||'')}" required></div>
       </div>
       <div class="form-row">
-        <div class="form-group"><label>Role</label><select id="us-role">${[['hr_admin','HR Admin'],['manager','Manager'],['employee','Employee']].map(([v,l])=>`<option value="${v}" ${ (u.role||'employee')===v?'selected':''}>${l}</option>`).join('')}</select></div>
+        <div class="form-group"><label>Access</label><select id="us-role"><option value="employee">Standard</option><option value="hr_admin" ${u.role==='hr_admin'?'selected':''}>HR Admin</option></select><div class="small muted">Standard users get manager access automatically when someone reports to them.</div></div>
         <div class="form-group"><label>Linked employee</label><select id="us-emp"><option value="">—</option>${state.employees.map(e=>`<option value="${e.id}" ${u.employee_id===e.id?'selected':''}>${esc(e.first_name+' '+e.last_name)}</option>`).join('')}</select></div>
       </div>
       ${id?'':tempPasswordField()}
@@ -5277,6 +5287,8 @@ async function saveUser(ev, id){
   if (!existing && all.some(x=>x.username.toLowerCase()===username)){ toast('Username already exists','error'); return; }
   const empId = val('us-emp') || null;
   if (empId && all.some(x=>x.employee_id===empId && x.id!==id)){ toast('That employee already has a login','error'); return; }
+  // Keep at least one HR Admin, or nobody could manage accounts
+  if (existing?.role==='hr_admin' && val('us-role')!=='hr_admin' && !all.some(x=>x.role==='hr_admin' && x.id!==id)){ toast('There must be at least one HR Admin account','error'); return; }
   let password_hash = existing?.password_hash;
   if (!id){
     const pw = val('us-pwd'), problem = passwordProblem(pw);
