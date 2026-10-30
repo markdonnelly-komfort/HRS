@@ -300,6 +300,8 @@
     .org-node.me { border-top-color: var(--primary-light); background: #fffbea; }
     .org-node.dim { opacity: .3; }
     .org-node.hit { outline: 3px solid var(--accent); outline-offset: 2px; }
+    .org-node .org-roles { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 3px; justify-content: center; }
+    .org-node .org-roles .badge { font-size: 0.6rem; padding: 2px 5px; }
 
     @media (max-width: 860px){
       .sidebar { transform: translateX(-100%); }
@@ -3089,9 +3091,11 @@ async function renderOrgChart(c){
   c.innerHTML = `
     <div class="toolbar">
       <div class="pill-tabs" id="org-view" style="margin:0"><div class="pill active" onclick="orgView('chart',this)">Chart</div><div class="pill" onclick="orgView('dept',this)">By department</div><div class="pill" onclick="orgView('roles',this)">Workplace roles</div></div>
-      <input class="grow" id="org-search" placeholder="Find a person, job title or department…" oninput="orgSearch()">
+      <input class="grow" id="org-search" placeholder="Find a person, job title, department or role…" oninput="orgSearch()">
+      <select id="org-role" onchange="orgSearch()"><option value="">Any workplace role</option>${WORKPLACE_ROLES.map(r=>`<option>${esc(r)}</option>`).join('')}</select>
       <select id="org-site" onchange="orgSearch()"><option value="">All sites</option>${SITES.map(s=>`<option>${esc(s)}</option>`).join('')}</select>
     </div>
+    <div id="org-role-result"></div>
     <div class="card" id="org-chart-card">
       ${people.length?`<div class="org-wrap"><div class="org-tree"><ul>${tree}</ul></div></div>`:'<div class="empty">No employees yet.</div>'}
       <div class="small muted" style="margin-top:8px">${people.length} people · reporting lines come from each employee's <em>Manager</em> field · click anyone for contact details</div>
@@ -3099,15 +3103,18 @@ async function renderOrgChart(c){
     <div id="org-dept-card" style="display:none">${orgDeptHtml(people)}</div>
     <div id="org-roles-card" style="display:none">${orgRolesHtml(people)}</div>`;
 }
-function orgSearchText(e){ return esc(`${e.first_name} ${e.last_name} ${e.job_title||''} ${e.department||''}`.toLowerCase()); }
+// Search text includes workplace roles, so typing "fire" or "first aid" finds them too
+function orgSearchText(e){ return esc(`${e.first_name} ${e.last_name} ${e.job_title||''} ${e.department||''} ${(e.workplace_roles||[]).join(' ')}`.toLowerCase()); }
+const orgAttrs = e => `data-search="${orgSearchText(e)}" data-site="${esc(e.site||'')}" data-roles="${esc((e.workplace_roles||[]).join('|'))}"`;
 function orgNodeHtml(e, nReports){
   const me = e.id===state.user.employee_id;
-  return `<div class="org-node${me?' me':''}" data-search="${orgSearchText(e)}" data-site="${esc(e.site||'')}" onclick="orgContact('${e.id}')">
+  return `<div class="org-node${me?' me':''}" ${orgAttrs(e)} onclick="orgContact('${e.id}')">
     ${avatarHtml(e)}
     <div class="org-name">${esc(e.first_name)} ${esc(e.last_name)}${me?' <span class="badge b-yellow">You</span>':''}</div>
     <div class="org-title">${esc(e.job_title||'')}</div>
     <div class="org-meta">${esc(e.department||'')}${e.site?' · '+esc(e.site):''}</div>
     ${nReports?`<div class="org-meta">${nReports} direct report${nReports!==1?'s':''}</div>`:''}
+    ${(e.workplace_roles||[]).length?`<div class="org-roles">${rolesHtml(e)}</div>`:''}
   </div>`;
 }
 function orgDeptHtml(people){
@@ -3115,7 +3122,7 @@ function orgDeptHtml(people){
   return depts.map(d => {
     const list = people.filter(e=>(e.department||'Other')===d).sort((a,b)=>(a.last_name||'').localeCompare(b.last_name||''));
     return `<div class="card org-dept"><div class="card-head"><h3>${esc(d)}</h3><span class="small muted">${list.length}</span></div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Job title</th><th>Site</th><th>Reports to</th><th>Work email</th><th>Phone</th></tr></thead><tbody>${
-      list.map(e=>`<tr class="clickable org-row" data-search="${orgSearchText(e)}" data-site="${esc(e.site||'')}" onclick="orgContact('${e.id}')"><td><strong>${esc(e.first_name+' '+e.last_name)}</strong></td><td>${esc(e.job_title||'')}</td><td>${esc(e.site||'')}</td><td>${e.manager_id?esc(empName(e.manager_id)):'—'}</td><td class="small">${e.work_email?`<a href="mailto:${esc(e.work_email)}" onclick="event.stopPropagation()">${esc(e.work_email)}</a>`:'—'}</td><td class="small" onclick="event.stopPropagation()">${phoneLink(e.work_phone||e.work_mobile)}</td></tr>`).join('')
+      list.map(e=>`<tr class="clickable org-row" ${orgAttrs(e)} onclick="orgContact('${e.id}')"><td><strong>${esc(e.first_name+' '+e.last_name)}</strong></td><td>${esc(e.job_title||'')}</td><td>${esc(e.site||'')}</td><td>${e.manager_id?esc(empName(e.manager_id)):'—'}</td><td class="small">${e.work_email?`<a href="mailto:${esc(e.work_email)}" onclick="event.stopPropagation()">${esc(e.work_email)}</a>`:'—'}</td><td class="small" onclick="event.stopPropagation()">${phoneLink(e.work_phone||e.work_mobile)}</td></tr>`).join('')
     }</tbody></table></div></div>`;
   }).join('');
 }
@@ -3127,8 +3134,8 @@ function orgRolesHtml(people){
   return sites.map(site => {
     const here = people.filter(e=>e.site===site && (e.workplace_roles||[]).length);
     if (!here.length) return '';
-    return `<div class="card org-dept"><div class="card-head"><h3>${esc(site)}</h3></div><div class="table-wrap"><table><thead><tr><th>Role</th><th>People</th></tr></thead><tbody>${
-      WORKPLACE_ROLES.map(role => { const who = here.filter(e=>e.workplace_roles.includes(role)); return `<tr><td>${esc(role)}</td><td>${who.length ? who.map(e=>`<a href="#" class="org-row" data-search="${orgSearchText(e)}" data-site="${esc(e.site||'')}" onclick="event.preventDefault();orgContact('${e.id}')">${esc(e.first_name+' '+e.last_name)}</a>${e.work_mobile||e.work_phone?` <span class="small muted">${esc(e.work_mobile||e.work_phone)}</span>`:''}`).join(', ') : '<span class="muted">None recorded</span>'}</td></tr>`; }).join('')
+    return `<div class="card org-site-roles"><div class="card-head"><h3>${esc(site)}</h3></div><div class="table-wrap"><table><thead><tr><th>Role</th><th>People</th></tr></thead><tbody>${
+      WORKPLACE_ROLES.map(role => { const who = here.filter(e=>e.workplace_roles.includes(role)); return `<tr class="org-role-row" data-role="${esc(role)}"><td>${esc(role)}</td><td>${who.length ? who.map(e=>`<div class="org-row" ${orgAttrs(e)}><a href="#" onclick="event.preventDefault();orgContact('${e.id}')">${esc(e.first_name+' '+e.last_name)}</a>${e.work_mobile||e.work_phone?` <span class="small muted">${esc(e.work_mobile||e.work_phone)}</span>`:''}</div>`).join('') : '<span class="muted">None recorded</span>'}</td></tr>`; }).join('')
     }</tbody></table></div></div>`;
   }).join('');
 }
@@ -3140,12 +3147,25 @@ function orgView(v, el){
   document.getElementById('org-roles-card').style.display = v==='roles' ? '' : 'none';
 }
 function orgSearch(){
-  const q = (val('org-search')||'').toLowerCase(), site = val('org-site');
-  const match = el => (!q || el.dataset.search.includes(q)) && (!site || el.dataset.site===site);
-  document.querySelectorAll('.org-node').forEach(n => { const hit = match(n); n.classList.toggle('dim', !hit); n.classList.toggle('hit', !!q && hit); });
+  const q = (val('org-search')||'').toLowerCase(), site = val('org-site'), role = val('org-role');
+  const match = el => (!q || el.dataset.search.includes(q)) && (!site || el.dataset.site===site) && (!role || el.dataset.roles.split('|').includes(role));
+  const shown = el => el.style.display!=='none';
+  document.querySelectorAll('.org-node').forEach(n => { const hit = match(n); n.classList.toggle('dim', !hit); n.classList.toggle('hit', !!(q||role) && hit); });
   document.querySelectorAll('.org-row').forEach(r => { r.style.display = match(r) ? '' : 'none'; });
-  document.querySelectorAll('.org-dept').forEach(d => { d.style.display = [...d.querySelectorAll('.org-row')].some(r=>r.style.display!=='none') ? '' : 'none'; });
-  if (q){ const first = document.querySelector('.org-node.hit'); if (first) first.scrollIntoView({ block:'nearest', inline:'center' }); }
+  document.querySelectorAll('.org-dept').forEach(d => { d.style.display = [...d.querySelectorAll('.org-row')].some(shown) ? '' : 'none'; });
+  // Workplace roles view: keep "None recorded" rows visible (useful to spot gaps) unless searching by name
+  document.querySelectorAll('.org-role-row').forEach(tr => { tr.style.display = (!role || tr.dataset.role===role) && (!q || [...tr.querySelectorAll('.org-row')].some(shown)) ? '' : 'none'; });
+  document.querySelectorAll('.org-site-roles').forEach(d => { d.style.display = [...d.querySelectorAll('.org-role-row')].some(shown) && (!site || d.querySelector('h3').textContent===site) ? '' : 'none'; });
+  // Choosing a role lists everyone who holds it, whichever view is showing
+  const res = document.getElementById('org-role-result');
+  if (role){
+    const who = state.employees.filter(e => e.status!=='leaver' && (e.workplace_roles||[]).includes(role) && (!site || e.site===site))
+      .sort((a,b)=>(a.site||'').localeCompare(b.site||'') || (a.last_name||'').localeCompare(b.last_name||''));
+    res.innerHTML = `<div class="card"><div class="card-head"><h3>${esc(role)}s${site?' · '+esc(site):''} (${who.length})</h3></div>${who.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Site</th><th>Department</th><th>Work mobile / phone</th></tr></thead><tbody>${
+      who.map(e=>`<tr class="clickable" onclick="orgContact('${e.id}')"><td><strong>${esc(e.first_name+' '+e.last_name)}</strong></td><td>${esc(e.site||'—')}</td><td>${esc(e.department||'—')}</td><td onclick="event.stopPropagation()">${phoneLink(e.work_mobile||e.work_phone)}</td></tr>`).join('')
+    }</tbody></table></div>` : `<div class="empty small">No ${esc(role.toLowerCase())}s recorded${site?' at '+esc(site):''}.</div>`}</div>`;
+  } else res.innerHTML = '';
+  if (q||role){ const first = document.querySelector('.org-node.hit'); if (first) first.scrollIntoView({ block:'nearest', inline:'center' }); }
 }
 // Contact card — work details only, so it's safe for everyone to see.
 function orgContact(id){
